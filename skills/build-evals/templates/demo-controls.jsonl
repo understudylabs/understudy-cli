@@ -1,0 +1,4 @@
+{"id":"acceptable","output":{"price":4},"expectedVerdicts":{"output-shape":"pass","quote-correct":"pass"},"note":"Correct quote under the invented inclusive weight rule.","caseId":"parcel-500-standard"}
+{"id":"alternative","output":{"currency":"synthetic-units","price":4},"expectedVerdicts":{"output-shape":"pass","quote-correct":"pass"},"note":"An additional descriptive field preserves a correct quote.","caseId":"parcel-500-standard"}
+{"id":"wrong-quote","output":{"price":7},"expectedVerdicts":{"output-shape":"pass","quote-correct":"fail"},"note":"Well-formed output with a boundary price error must fail correctness.","caseId":"parcel-500-standard"}
+{"id":"wrong-shape","output":{"price":"4"},"expectedVerdicts":{"output-shape":"fail","quote-correct":"unscored"},"note":"A string fails the numeric contract; price correctness remains unscored.","caseId":"parcel-500-standard"}

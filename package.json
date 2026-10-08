@@ -1,0 +1,38 @@
+{
+  "name": "understudy-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Configure, verify, and inspect Understudy integrations.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "understudy": "./dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICES.txt"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "clean": "node scripts/clean-dist.mjs",
+    "build": "npm run clean && node scripts/bundle-skills.mjs && tsc -p tsconfig.json",
+    "build:binary": "/usr/bin/env -u BUN_OPTIONS -u BUN_BE_BUN bun scripts/build-binary.mjs",
+    "check:binary": "node tests/binary-smoke.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "check:public": "node scripts/check-public.mjs",
+    "check": "npm test && npm run check:public"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "commander": "^14.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,1086 @@
+name: Binary release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/binary-release.yml"
+      - ".gitignore"
+      - "AGENTS.md"
+      - "README.md"
+      - "docs/**"
+      - "skills/**"
+      - "install.sh"
+      - "package*.json"
+      - "scripts/**"
+      - "src/**"
+      - "tests/**"
+      - "tsconfig.json"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Version tag to publish (vX.Y.Z)"
+        required: true
+        type: string
+      release_confirmation:
+        description: "Type publish-vX.Y.Z"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag }}
+
+concurrency:
+  group: binary-release-${{ github.event_name == 'workflow_dispatch' && 'publish' || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify macOS arm64
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate manual release approval
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_CONFIRMATION: ${{ inputs.release_confirmation }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/heads/main) ;;
+            *) echo "Dispatch releases from the current main branch." >&2; exit 1 ;;
+          esac
+          printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
+          test "$RELEASE_CONFIRMATION" = "publish-${RELEASE_TAG}"
+
+      - name: Check out the exact commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node for source checks
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.22.0
+          cache: npm
+
+      - name: Set up the pinned Bun compiler
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Verify the Bun compiler
+        run: |
+          set -euo pipefail
+          unset BUN_OPTIONS BUN_BE_BUN
+          test "$(bun --version)" = "1.4.0"
+          test "$(bun --revision)" = "1.4.0+34cbb9a40"
+
+      - name: Validate release source
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          BUN_REDISTRIBUTION_APPROVED: ${{ vars.BUN_REDISTRIBUTION_APPROVED }}
+          PUBLIC_BINARY_TERMS_APPROVED: ${{ vars.PUBLIC_BINARY_TERMS_APPROVED }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          resolve_commit() {
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/$1")"
+            object_type="$(printf '%s' "$object" | jq -r '.object.type')"
+            object_sha="$(printf '%s' "$object" | jq -r '.object.sha')"
+            while [ "$object_type" = "tag" ]; do
+              object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")"
+              object_type="$(printf '%s' "$object" | jq -r '.object.type')"
+              object_sha="$(printf '%s' "$object" | jq -r '.object.sha')"
+            done
+            test "$object_type" = "commit"
+            printf '%s' "$object_sha"
+          }
+
+          version="$(node -p "require('./package.json').version")"
+          expected_tag="v${version}"
+          test "$BUN_REDISTRIBUTION_APPROVED" = "bun-v1.4.0-reviewed"
+          test "$PUBLIC_BINARY_TERMS_APPROVED" = "understudy-cli-public-v1-reviewed"
+          test "$RELEASE_TAG" = "$expected_tag"
+          test "$(resolve_commit heads/main)" = "$GITHUB_SHA"
+          test "$(resolve_commit "tags/${expected_tag}")" = "$GITHUB_SHA"
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run source checks
+        run: npm run check
+
+      - name: Build the standalone executable
+        run: |
+          set -euo pipefail
+          unset BUN_OPTIONS BUN_BE_BUN
+          npm run build:binary
+
+      - name: Enforce preview artifact contract
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          binary="artifacts/understudy-darwin-arm64"
+          checksum="artifacts/SHA256SUMS"
+          manifest="artifacts/latest.json"
+          installer="artifacts/install.sh"
+          notices="artifacts/THIRD_PARTY_NOTICES.txt"
+
+          for file in "$binary" "$checksum" "$manifest" "$installer" "$notices"; do
+            test -f "$file"
+            test ! -L "$file"
+          done
+          test "$(find artifacts -type f | wc -l | tr -d ' ')" = "5"
+          test "$(stat -f '%z' "$binary")" -le 70000000
+          test -s "$notices"
+          /bin/sh -n "$installer"
+          (
+            cd artifacts
+            shasum -a 256 -c SHA256SUMS
+          )
+
+          digest="$(shasum -a 256 "$binary" | awk '{ print $1 }')"
+          size="$(stat -f '%z' "$binary")"
+          test "$(cat "$checksum")" = "$digest  understudy-darwin-arm64"
+          jq -e \
+            --arg version "$version" \
+            --arg digest "$digest" \
+            --argjson size "$size" \
+            '
+              keys == ["artifact", "schemaVersion", "sha256", "size", "target", "version"] and
+              .schemaVersion == 1 and
+              .version == $version and
+              .target == "darwin-arm64" and
+              .artifact == "understudy-darwin-arm64" and
+              .sha256 == $digest and
+              .size == $size
+            ' "$manifest" >/dev/null
+
+      - name: Test the standalone executable without Node or Bun on PATH
+        run: |
+          set -euo pipefail
+          unset BUN_OPTIONS BUN_BE_BUN
+          npm run check:binary
+
+      - name: Upload credential-free release inputs
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: understudy-release-inputs-${{ github.sha }}
+          path: |
+            artifacts/understudy-darwin-arm64
+            artifacts/SHA256SUMS
+            artifacts/latest.json
+            artifacts/install.sh
+            artifacts/THIRD_PARTY_NOTICES.txt
+            scripts/macos-entitlements.plist
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-release:
+    name: Sign and notarize macOS arm64 release
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Download credential-free release inputs
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: understudy-release-inputs-${{ github.sha }}
+          path: release-inputs
+
+      - name: Validate the release source and inputs
+        env:
+          BUN_REDISTRIBUTION_APPROVED: ${{ vars.BUN_REDISTRIBUTION_APPROVED }}
+          PUBLIC_BINARY_TERMS_APPROVED: ${{ vars.PUBLIC_BINARY_TERMS_APPROVED }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_TEAM_ID: ${{ vars.MACOS_DEVELOPER_ID_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          resolve_commit() {
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/$1")"
+            object_type="$(printf '%s' "$object" | jq -r '.object.type')"
+            object_sha="$(printf '%s' "$object" | jq -r '.object.sha')"
+            while [ "$object_type" = "tag" ]; do
+              object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")"
+              object_type="$(printf '%s' "$object" | jq -r '.object.type')"
+              object_sha="$(printf '%s' "$object" | jq -r '.object.sha')"
+            done
+            test "$object_type" = "commit"
+            printf '%s' "$object_sha"
+          }
+
+          version="${RELEASE_TAG#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          expected_tag="v${version}"
+          test "$BUN_REDISTRIBUTION_APPROVED" = "bun-v1.4.0-reviewed"
+          test "$PUBLIC_BINARY_TERMS_APPROVED" = "understudy-cli-public-v1-reviewed"
+          test "$RELEASE_TAG" = "$expected_tag"
+          test "$(resolve_commit heads/main)" = "$GITHUB_SHA"
+          test "$(resolve_commit "tags/${expected_tag}")" = "$GITHUB_SHA"
+          [[ "$EXPECTED_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
+
+          release_directory="$GITHUB_WORKSPACE/release-inputs/artifacts"
+          binary="$release_directory/understudy-darwin-arm64"
+          installer="$release_directory/install.sh"
+          entitlements="$GITHUB_WORKSPACE/release-inputs/scripts/macos-entitlements.plist"
+          for file in understudy-darwin-arm64 SHA256SUMS latest.json install.sh THIRD_PARTY_NOTICES.txt; do
+            test -f "$release_directory/$file"
+            test ! -L "$release_directory/$file"
+          done
+          test "$(find "$release_directory" -type f | wc -l | tr -d ' ')" = "5"
+          test "$(stat -f '%z' "$binary")" -le 70000000
+          test -s "$release_directory/THIRD_PARTY_NOTICES.txt"
+          team_marker='__UNDERSTUDY_DEVELOPER_TEAM_ID__'
+          test "$(grep -o "$team_marker" "$installer" | wc -l | tr -d ' ')" = "1"
+          sed "s/$team_marker/$EXPECTED_TEAM_ID/" "$installer" > "$installer.prepared"
+          mv "$installer.prepared" "$installer"
+          ! grep -q "$team_marker" "$installer"
+          grep -Eq '^expected_team_id="[A-Z0-9]{10}"$' "$installer"
+          /bin/sh -n "$installer"
+          (
+            cd "$release_directory"
+            shasum -a 256 -c SHA256SUMS
+          )
+          jq -e \
+            --arg version "$version" \
+            '.version == $version and .artifact == "understudy-darwin-arm64"' \
+            "$release_directory/latest.json" >/dev/null
+
+          test -f "$entitlements"
+          test ! -L "$entitlements"
+          entitlements_json="$(/usr/bin/plutil -convert json -o - "$entitlements")"
+          printf '%s' "$entitlements_json" | jq -e '
+            keys == [
+              "com.apple.security.cs.allow-jit",
+              "com.apple.security.cs.allow-unsigned-executable-memory"
+            ] and all(.[]; . == true)
+          ' >/dev/null
+          chmod 0755 "$binary" "$release_directory/install.sh"
+
+          {
+            echo "RELEASE_VERSION=$version"
+            echo "RELEASE_DIRECTORY=$release_directory"
+            echo "RELEASE_BINARY=$binary"
+            echo "RELEASE_ENTITLEMENTS=$entitlements"
+            echo "UNDERSTUDY_EXPECTED_TEAM_ID=$EXPECTED_TEAM_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Import release signing credentials
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$DEVELOPER_ID_P12_BASE64"
+          test -n "$DEVELOPER_ID_P12_PASSWORD"
+
+          certificate="$RUNNER_TEMP/understudy-developer-id.p12"
+          keychain="$RUNNER_TEMP/understudy-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" | base64 -D > "$certificate"
+          chmod 0600 "$certificate"
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" \
+            -k "$keychain" \
+            -P "$DEVELOPER_ID_P12_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk '/Developer ID Application:/ { print $2; count += 1 } END { if (count != 1) exit 1 }')"
+          test -n "$identity"
+
+          {
+            echo "UNDERSTUDY_SIGNING_IDENTITY=$identity"
+            echo "UNDERSTUDY_SIGNING_KEYCHAIN=$keychain"
+          } >> "$GITHUB_ENV"
+
+      - name: Sign the executable
+        run: |
+          set -euo pipefail
+          codesign \
+            --force \
+            --sign "$UNDERSTUDY_SIGNING_IDENTITY" \
+            --keychain "$UNDERSTUDY_SIGNING_KEYCHAIN" \
+            --identifier com.understudylabs.understudy \
+            --options runtime \
+            --entitlements "$RELEASE_ENTITLEMENTS" \
+            --timestamp \
+            "$RELEASE_BINARY"
+          codesign --verify --strict --verbose=2 "$RELEASE_BINARY"
+          test "$(codesign -dvv "$RELEASE_BINARY" 2>&1 | sed -n 's/^TeamIdentifier=//p')" = "$UNDERSTUDY_EXPECTED_TEAM_ID"
+          test "$(stat -f '%z' "$RELEASE_BINARY")" -le 70000000
+
+      - name: Notarize the executable
+        env:
+          NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$NOTARY_KEY_P8_BASE64"
+          printf '%s\n' "$NOTARY_KEY_ID" | grep -Eq '^[A-Z0-9]{10,}$'
+          printf '%s\n' "$NOTARY_ISSUER_ID" | \
+            grep -Eq '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+
+          notary_key="$RUNNER_TEMP/understudy-notary-key.p8"
+          notary_archive="$RUNNER_TEMP/understudy-notarization.zip"
+          notary_response="$RUNNER_TEMP/understudy-notarization.json"
+          printf '%s' "$NOTARY_KEY_P8_BASE64" | base64 -D > "$notary_key"
+          chmod 0600 "$notary_key"
+          /usr/bin/ditto -c -k --keepParent \
+            "$RELEASE_BINARY" \
+            "$notary_archive"
+
+          xcrun notarytool submit "$notary_archive" \
+            --key "$notary_key" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait \
+            --timeout 30m \
+            --output-format json > "$notary_response"
+          jq -e '
+            .status == "Accepted" and
+            (.id | type == "string") and
+            (.id | test("^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"))
+          ' "$notary_response" >/dev/null
+
+      - name: Remove release credentials before executing release code
+        run: |
+          set -euo pipefail
+          security delete-keychain "$RUNNER_TEMP/understudy-signing.keychain-db"
+          rm -f \
+            "$RUNNER_TEMP/understudy-developer-id.p12" \
+            "$RUNNER_TEMP/understudy-notary-key.p8" \
+            "$RUNNER_TEMP/understudy-notarization.zip" \
+            "$RUNNER_TEMP/understudy-notarization.json"
+
+      - name: Verify and package the final release
+        run: |
+          set -euo pipefail
+          unset BUN_OPTIONS BUN_BE_BUN
+
+          checksum="$RELEASE_DIRECTORY/SHA256SUMS"
+          manifest="$RELEASE_DIRECTORY/latest.json"
+          digest="$(shasum -a 256 "$RELEASE_BINARY" | awk '{ print $1 }')"
+          size="$(stat -f '%z' "$RELEASE_BINARY")"
+          test "$size" -le 70000000
+          printf '%s  understudy-darwin-arm64\n' "$digest" > "$checksum"
+          jq -n \
+            --arg version "$RELEASE_VERSION" \
+            --arg digest "$digest" \
+            --argjson size "$size" \
+            '{
+              schemaVersion: 1,
+              version: $version,
+              target: "darwin-arm64",
+              artifact: "understudy-darwin-arm64",
+              sha256: $digest,
+              size: $size
+            }' > "$manifest"
+
+          codesign --verify --strict --verbose=2 "$RELEASE_BINARY"
+          test "$(codesign -dvv "$RELEASE_BINARY" 2>&1 | sed -n 's/^TeamIdentifier=//p')" = "$UNDERSTUDY_EXPECTED_TEAM_ID"
+          file "$RELEASE_BINARY" | grep -q 'Mach-O 64-bit executable arm64'
+          (
+            cd "$RELEASE_DIRECTORY"
+            shasum -a 256 -c SHA256SUMS
+          )
+
+          test_home="$(mktemp -d)"
+          cleanup_test_home() {
+            rm -rf "$test_home"
+          }
+          trap cleanup_test_home EXIT HUP INT TERM
+          test_home="$(cd "$test_home" && pwd -P)"
+          chmod 0700 "$test_home"
+          version="$RELEASE_VERSION"
+          install_directory="$test_home/bin"
+          env -i HOME="$test_home" USERPROFILE="$test_home" PATH=/usr/bin:/bin TMPDIR=/tmp \
+            /bin/sh "$RELEASE_DIRECTORY/install.sh" \
+              --release-dir "$RELEASE_DIRECTORY" \
+              --install-dir "$install_directory" >/dev/null
+          # installed-cli-smoke:start
+          test -x "$install_directory/understudy"
+          env -i HOME="$test_home" USERPROFILE="$test_home" \
+            PATH="$install_directory:/usr/bin:/bin" TMPDIR="$test_home" \
+            /bin/sh -eu -c '
+              cd "$HOME"
+              test "$(command -v understudy)" = "$1/understudy"
+              # runtime-absence:start
+              for runtime in node bun; do
+                if command -v "$runtime" >/dev/null 2>&1; then
+                  echo "Unexpected runtime on the install-test PATH: $runtime" >&2
+                  exit 1
+                fi
+              done
+              # runtime-absence:end
+              test "$(understudy --version)" = "$2"
+              understudy --help > "$HOME/help.txt"
+              understudy --json auth status > "$HOME/auth.json"
+              status=0
+              understudy status --json > "$HOME/status.json" || status=$?
+              test "$status" = 1
+              understudy skills list --json > "$HOME/skills.json"
+              understudy skills install \
+                --directory "$HOME/agent skills" --json > "$HOME/installed-skills.json"
+              understudy skills install \
+                --directory "$HOME/agent skills" --json > "$HOME/repeated-skills.json"
+            ' sh "$install_directory" "$version"
+          grep -q 'login' "$test_home/help.txt"
+          grep -q 'skills' "$test_home/help.txt"
+          # unauthenticated-status:start
+          jq -e '
+            .authenticated == false and has("method") and .method == null and
+            .verification == "local" and .pending == false and
+            has("expiresAt") and .expiresAt == null
+          ' "$test_home/auth.json" >/dev/null
+          jq -e '.authenticated == false and .ready == false' "$test_home/status.json" >/dev/null
+          # unauthenticated-status:end
+          # installed-skills:start
+          jq -e --arg version "$version" '
+            .cliVersion == $version and (.skills | length) > 0 and
+            ([.skills[].name] | unique | length) == (.skills | length) and
+            ([.skills[].name] | index("setup-understudy") != null and index("build-evals") != null) and
+            all(.skills[];
+              (.name | test("^[a-z0-9]+(-[a-z0-9]+)*$")) and
+              (.version | test("^[a-f0-9]{64}$")) and
+              .entrypoint == "SKILL.md" and (.files | length) > 0 and
+              ([.files[].path] | unique | length) == (.files | length) and
+              ([.files[].path] | index("SKILL.md") != null) and
+              all(.files[];
+                (.sha256 | test("^[a-f0-9]{64}$")) and
+                (.path | test("^[A-Za-z0-9_./-]+$")) and
+                all(.path | split("/")[]; . != "" and . != "." and . != "..")
+              )
+            )
+          ' "$test_home/skills.json" >/dev/null
+          skill_root="$test_home/agent skills"
+          for result in installed repeated; do
+            expected_status=installed
+            if [ "$result" = repeated ]; then expected_status=unchanged; fi
+            jq -e --slurpfile listed "$test_home/skills.json" \
+              --arg directory "$skill_root" --arg expected_status "$expected_status" '
+                $listed[0].skills as $catalog |
+                .cliVersion == $listed[0].cliVersion and .directory == $directory and
+                ([.skills[].name] | sort) == ([$catalog[].name] | sort) and
+                all(.skills[];
+                  . as $installed | ($catalog[] | select(.name == $installed.name)) as $skill |
+                  .version == $skill.version and .status == $expected_status and
+                  .directory == ($directory + "/" + .name) and
+                  .entrypoint == (.directory + "/SKILL.md") and .files == $skill.files
+                )
+              ' "$test_home/$result-skills.json" >/dev/null
+          done
+          test "$(find "$skill_root" -type f | wc -l | tr -d ' ')" = \
+            "$(jq '[.skills[].files | length] | add' "$test_home/skills.json")"
+          test -z "$(find "$skill_root" -type l -print)"
+          while IFS=$'\t' read -r skill_name skill_file expected_digest; do
+            test -f "$skill_root/$skill_name/$skill_file"
+            test "$(shasum -a 256 "$skill_root/$skill_name/$skill_file" | awk '{ print $1 }')" = "$expected_digest"
+          done < <(jq -r '.skills[] | .name as $name | .files[] | [$name, .path, .sha256] | @tsv' "$test_home/skills.json")
+          # installed-skills:end
+          test ! -e "$test_home/.understudy"
+          # installed-cli-smoke:end
+          cleanup_test_home
+          trap - EXIT HUP INT TERM
+
+          test "$(shasum -a 256 "$RELEASE_BINARY" | awk '{ print $1 }')" = "$digest"
+          test "$(stat -f '%z' "$RELEASE_BINARY")" = "$size"
+          codesign --verify --strict --verbose=2 "$RELEASE_BINARY"
+          test "$(codesign -dvv "$RELEASE_BINARY" 2>&1 | sed -n 's/^TeamIdentifier=//p')" = "$UNDERSTUDY_EXPECTED_TEAM_ID"
+          (
+            cd "$RELEASE_DIRECTORY"
+            shasum -a 256 -c SHA256SUMS
+          )
+
+      - name: Upload verified release inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: understudy-darwin-arm64-${{ github.sha }}
+          path: |
+            release-inputs/artifacts/understudy-darwin-arm64
+            release-inputs/artifacts/SHA256SUMS
+            release-inputs/artifacts/latest.json
+            release-inputs/artifacts/install.sh
+            release-inputs/artifacts/THIRD_PARTY_NOTICES.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove any remaining release credentials
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/understudy-signing.keychain-db" 2>/dev/null || true
+          rm -f \
+            "$RUNNER_TEMP/understudy-developer-id.p12" \
+            "$RUNNER_TEMP/understudy-notary-key.p8" \
+            "$RUNNER_TEMP/understudy-notarization.zip" \
+            "$RUNNER_TEMP/understudy-notarization.json"
+
+  publish:
+    name: Publish public release
+    if: github.event_name == 'workflow_dispatch'
+    needs: sign-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download the verified release inputs
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: understudy-darwin-arm64-${{ github.sha }}
+          path: artifacts
+
+      - name: Validate the source and signed release assets
+        env:
+          BUN_REDISTRIBUTION_APPROVED: ${{ vars.BUN_REDISTRIBUTION_APPROVED }}
+          PUBLIC_BINARY_TERMS_APPROVED: ${{ vars.PUBLIC_BINARY_TERMS_APPROVED }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          resolve_commit() {
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/$1")"
+            object_type="$(printf '%s' "$object" | jq -r '.object.type')"
+            object_sha="$(printf '%s' "$object" | jq -r '.object.sha')"
+            while [ "$object_type" = "tag" ]; do
+              object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")"
+              object_type="$(printf '%s' "$object" | jq -r '.object.type')"
+              object_sha="$(printf '%s' "$object" | jq -r '.object.sha')"
+            done
+            test "$object_type" = "commit"
+            printf '%s' "$object_sha"
+          }
+
+          version="${RELEASE_TAG#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          expected_tag="v${version}"
+          test "$BUN_REDISTRIBUTION_APPROVED" = "bun-v1.4.0-reviewed"
+          test "$PUBLIC_BINARY_TERMS_APPROVED" = "understudy-cli-public-v1-reviewed"
+          test "$RELEASE_TAG" = "$expected_tag"
+          test "$(resolve_commit heads/main)" = "$GITHUB_SHA"
+          test "$(resolve_commit "tags/${expected_tag}")" = "$GITHUB_SHA"
+
+          cd artifacts
+          for file in understudy-darwin-arm64 SHA256SUMS latest.json install.sh THIRD_PARTY_NOTICES.txt; do
+            test -f "$file"
+            test ! -L "$file"
+          done
+          test "$(find . -type f | wc -l | tr -d ' ')" = "5"
+          sha256sum -c SHA256SUMS
+          digest="$(sha256sum understudy-darwin-arm64 | awk '{ print $1 }')"
+          size="$(stat -c '%s' understudy-darwin-arm64)"
+          jq -e \
+            --arg version "$version" \
+            --arg digest "$digest" \
+            --argjson size "$size" \
+            '
+              keys == ["artifact", "schemaVersion", "sha256", "size", "target", "version"] and
+              .schemaVersion == 1 and
+              .version == $version and
+              .target == "darwin-arm64" and
+              .artifact == "understudy-darwin-arm64" and
+              .sha256 == $digest and
+              .size == $size
+            ' latest.json >/dev/null
+          /bin/sh -n install.sh
+          ! grep -q '__UNDERSTUDY_DEVELOPER_TEAM_ID__' install.sh
+          grep -Eq '^expected_team_id="[A-Z0-9]{10}"$' install.sh
+          test -s THIRD_PARTY_NOTICES.txt
+
+          expected_digests="$RUNNER_TEMP/expected-release-assets.sha256"
+          sha256sum \
+            understudy-darwin-arm64 \
+            SHA256SUMS \
+            latest.json \
+            install.sh \
+            THIRD_PARTY_NOTICES.txt > "$expected_digests"
+
+          {
+            echo "RELEASE_VERSION=$version"
+            echo "RELEASE_REPOSITORY=understudylabs/understudy-cli-releases"
+            echo "RELEASE_DIRECTORY=$GITHUB_WORKSPACE/artifacts"
+            echo "EXPECTED_RELEASE_DIGESTS=$expected_digests"
+          } >> "$GITHUB_ENV"
+
+      - name: Mint the public release publisher token
+        id: publisher-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.UNDERSTUDY_RELEASE_PUBLISHER_CLIENT_ID }}
+          private-key: ${{ secrets.UNDERSTUDY_RELEASE_PUBLISHER_PRIVATE_KEY }}
+          owner: understudylabs
+          repositories: understudy-cli-releases
+          permission-administration: read
+          permission-contents: write
+
+      - name: Stage, verify, and publish the public release
+        env:
+          GH_TOKEN: ${{ steps.publisher-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          github_request_status() {
+            local method="$1"
+            local endpoint="$2"
+            local response="$3"
+            local status
+
+            if ! status="$(/usr/bin/curl \
+              --silent \
+              --show-error \
+              --request "$method" \
+              --output "$response" \
+              --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/${endpoint}")"; then
+              echo "GitHub API request failed for ${endpoint}." >&2
+              return 1
+            fi
+
+            printf '%s' "$status"
+          }
+
+          # release-discovery:start
+          find_release_status() {
+            local response="$1"
+            local published_status
+            local draft_lookup
+            local release_id
+            local release_owner="${RELEASE_REPOSITORY%%/*}"
+            local release_name="${RELEASE_REPOSITORY#*/}"
+
+            if ! published_status="$(github_request_status GET \
+              "repos/${RELEASE_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+              "$response")"; then
+              return 1
+            fi
+            case "$published_status" in
+              200)
+                printf '200'
+                return 0
+                ;;
+              404)
+                ;;
+              *)
+                echo "Could not query the published release (HTTP ${published_status})." >&2
+                return 1
+                ;;
+            esac
+
+            if ! draft_lookup="$(gh api graphql \
+              -f query='query RepositoryReleaseByTag($owner: String!, $name: String!, $tagName: String!) { repository(owner: $owner, name: $name) { release(tagName: $tagName) { databaseId isDraft } } }' \
+              -F owner="$release_owner" \
+              -F name="$release_name" \
+              -F tagName="$RELEASE_TAG")"; then
+              echo "Could not query the draft release." >&2
+              return 1
+            fi
+            if printf '%s' "$draft_lookup" | jq -e '
+              (.errors? == null) and
+              (.data.repository? | type == "object") and
+              ((.data.repository? // {}) | has("release")) and
+              .data.repository.release == null
+            ' >/dev/null; then
+              printf '{}\n' > "$response"
+              printf '404'
+              return 0
+            fi
+            if ! printf '%s' "$draft_lookup" | jq -e '
+              (.errors? == null) and
+              (.data.repository? | type == "object") and
+              ((.data.repository? // {}) | has("release")) and
+              (.data.repository.release | type == "object") and
+              .data.repository.release.isDraft == true and
+              (.data.repository.release.databaseId | type == "number")
+            ' >/dev/null; then
+              echo "The release lookup returned an unexpected state." >&2
+              return 1
+            fi
+            release_id="$(printf '%s' "$draft_lookup" | jq -er \
+              '.data.repository.release.databaseId')"
+            if ! gh api \
+              "repos/${RELEASE_REPOSITORY}/releases/${release_id}" \
+              > "$response"; then
+              echo "Could not fetch the draft release by id." >&2
+              return 1
+            fi
+            printf '200'
+          }
+          # release-discovery:end
+
+          wait_for_created_release() {
+            local response="$1"
+            local delay
+            local status
+
+            for delay in 0 1 2 4 4 4; do
+              if [ "$delay" -gt 0 ]; then
+                sleep "$delay"
+              fi
+              if status="$(find_release_status "$response")" &&
+                 [ "$status" = 200 ]; then
+                printf '200'
+                return 0
+              fi
+            done
+
+            echo "The created draft release did not become visible." >&2
+            return 1
+          }
+
+          # validate-release-state:start
+          validate_release_state() {
+            local response="$1"
+            local expected_state="$2"
+
+            jq -e \
+              --arg tag "$RELEASE_TAG" \
+              --arg title "Understudy CLI ${RELEASE_VERSION}" \
+              --arg target "$target_main_sha" \
+              --arg notes "$release_notes" \
+              --arg state "$expected_state" \
+              --argjson expectedDigests "$expected_asset_digests" \
+              '
+                (.id | type == "number") and
+                .tag_name == $tag and
+                .name == $title and
+                .target_commitish == $target and
+                .body == $notes and
+                .prerelease == false and
+                (
+                  ($state == "draft" and .draft == true and .immutable == false) or
+                  ($state == "published" and .draft == false and .immutable == true)
+                ) and
+                ([.assets[].name] | sort) == [
+                  "SHA256SUMS",
+                  "THIRD_PARTY_NOTICES.txt",
+                  "install.sh",
+                  "latest.json",
+                  "understudy-darwin-arm64"
+                ] and
+                all(.assets[]; .state == "uploaded" and .size > 0) and
+                ([.assets[] | {key: .name, value: .digest}] | from_entries) ==
+                  $expectedDigests
+              ' "$response" >/dev/null
+          }
+          # validate-release-state:end
+
+          # verify-release-tag:start
+          verify_release_tag() {
+            local response="$1"
+            local allow_absent="$2"
+            local status
+            local tag_sha
+
+            if ! status="$(github_request_status GET \
+              "repos/${RELEASE_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" \
+              "$response")"; then
+              return 1
+            fi
+
+            case "$status" in
+              200)
+                tag_sha="$(jq -er \
+                  'select(.object.type == "commit") | .object.sha' \
+                  "$response")" || {
+                    echo "The release tag has an unexpected shape." >&2
+                    return 1
+                  }
+                if [ "$tag_sha" != "$target_main_sha" ]; then
+                  echo "The release tag does not point to the verified mirror commit." >&2
+                  return 1
+                fi
+                ;;
+              404)
+                if [ "$allow_absent" != true ]; then
+                  echo "The published release tag is missing." >&2
+                  return 1
+                fi
+                ;;
+              *)
+                echo "Could not verify the release tag (HTTP ${status})." >&2
+                return 1
+                ;;
+            esac
+          }
+          # verify-release-tag:end
+
+          repository_json="$(gh api "repos/${RELEASE_REPOSITORY}")"
+          printf '%s' "$repository_json" | jq -e '
+            .private == false and
+            .visibility == "public" and
+            .default_branch == "main" and
+            .archived == false and
+            .disabled == false
+          ' >/dev/null
+          immutability_json="$(gh api \
+            "repos/${RELEASE_REPOSITORY}/immutable-releases")"
+          printf '%s' "$immutability_json" | jq -e \
+            '.enabled == true' >/dev/null
+          target_main_json="$(gh api \
+            "repos/${RELEASE_REPOSITORY}/git/ref/heads/main")"
+          target_main_sha="$(printf '%s' "$target_main_json" | jq -er \
+            'select(.object.type == "commit") | .object.sha')"
+          [[ "$target_main_sha" =~ ^[0-9a-f]{40}$ ]]
+
+          expected_asset_digests="$(jq -Rn '
+            [
+              inputs |
+              capture("^(?<digest>[0-9a-f]{64})  (?<name>.+)$") |
+              {key: .name, value: ("sha256:" + .digest)}
+            ] |
+            from_entries
+          ' < "$EXPECTED_RELEASE_DIGESTS")"
+          release_marker="understudy-release-run:${GITHUB_RUN_ID}:${GITHUB_SHA}"
+          release_notes="$(printf \
+            'Standalone macOS arm64 release of Understudy CLI %s.\n\n<!-- %s -->' \
+            "$RELEASE_VERSION" \
+            "$release_marker")"
+          release_response="$RUNNER_TEMP/release.json"
+          tag_response="$RUNNER_TEMP/release-tag.json"
+
+          release_status="$(find_release_status "$release_response")"
+          case "$release_status" in
+            200)
+              release_id="$(jq -er \
+                'select(.id | type == "number") | .id' \
+                "$release_response")"
+              gh api \
+                "repos/${RELEASE_REPOSITORY}/releases/${release_id}" \
+                > "$release_response"
+
+              if validate_release_state "$release_response" published; then
+                verify_release_tag "$tag_response" false
+                test "$(gh api \
+                  "repos/${RELEASE_REPOSITORY}/releases/latest" \
+                  --jq '.tag_name')" = "$RELEASE_TAG"
+                exit 0
+              fi
+
+              if ! validate_release_state "$release_response" draft; then
+                echo "Existing release state is not owned by this exact workflow run." >&2
+                exit 1
+              fi
+              ;;
+            404)
+              tag_status="$(github_request_status GET \
+                "repos/${RELEASE_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" \
+                "$tag_response")"
+              if [ "$tag_status" != 404 ]; then
+                echo "Refusing to create a release while its tag already exists." >&2
+                exit 1
+              fi
+
+              cd "$RELEASE_DIRECTORY"
+              gh release create "$RELEASE_TAG" \
+                ./understudy-darwin-arm64 \
+                ./SHA256SUMS \
+                ./latest.json \
+                ./install.sh \
+                ./THIRD_PARTY_NOTICES.txt \
+                --repo "$RELEASE_REPOSITORY" \
+                --target "$target_main_sha" \
+                --title "Understudy CLI ${RELEASE_VERSION}" \
+                --notes "$release_notes" \
+                --draft \
+                --latest=false
+
+              release_status="$(wait_for_created_release "$release_response")"
+              test "$release_status" = 200
+              release_id="$(jq -er \
+                'select(.id | type == "number") | .id' \
+                "$release_response")"
+              gh api \
+                "repos/${RELEASE_REPOSITORY}/releases/${release_id}" \
+                > "$release_response"
+              if ! validate_release_state "$release_response" draft; then
+                echo "The created draft does not match the verified release payload." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Could not determine existing release state (HTTP ${release_status})." >&2
+              exit 1
+              ;;
+          esac
+
+          release_id="$(jq -er '.id' "$release_response")"
+          gh api \
+            "repos/${RELEASE_REPOSITORY}/releases/${release_id}" \
+            > "$release_response"
+          validate_release_state "$release_response" draft
+          immutability_json="$(gh api \
+            "repos/${RELEASE_REPOSITORY}/immutable-releases")"
+          printf '%s' "$immutability_json" | jq -e \
+            '.enabled == true' >/dev/null
+          verify_release_tag "$tag_response" true
+
+          published_json="$(gh api --method PATCH \
+            "repos/${RELEASE_REPOSITORY}/releases/${release_id}" \
+            -F draft=false \
+            -f make_latest=true)"
+          printf '%s' "$published_json" > "$release_response"
+          validate_release_state "$release_response" published
+
+          gh api \
+            "repos/${RELEASE_REPOSITORY}/releases/${release_id}" \
+            > "$release_response"
+          validate_release_state "$release_response" published
+          verify_release_tag "$tag_response" false
+          test "$(gh api \
+            "repos/${RELEASE_REPOSITORY}/releases/latest" \
+            --jq '.tag_name')" = "$RELEASE_TAG"
+
+  smoke-public-install:
+    name: Test anonymous public installation
+    if: github.event_name == 'workflow_dispatch'
+    needs: publish
+    runs-on: macos-15
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Install the published release without GitHub credentials
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_TAG#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test_home="$(mktemp -d)"
+          cleanup_test_home() {
+            rm -rf "$test_home"
+          }
+          trap cleanup_test_home EXIT HUP INT TERM
+          test_home="$(cd "$test_home" && pwd -P)"
+          chmod 0700 "$test_home"
+
+          installer="$test_home/install.sh"
+          install_directory="$test_home/bin"
+          env -i HOME="$test_home" USERPROFILE="$test_home" PATH=/usr/bin:/bin TMPDIR=/tmp \
+            /usr/bin/curl --disable \
+            --proto '=https' \
+            --tlsv1.2 \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --retry 3 \
+            --output "$installer" \
+            'https://github.com/understudylabs/understudy-cli-releases/releases/latest/download/install.sh'
+          /bin/sh -n "$installer"
+
+          env -i \
+            HOME="$test_home" \
+            USERPROFILE="$test_home" \
+            PATH=/usr/bin:/bin \
+            TMPDIR=/tmp \
+            UNDERSTUDY_INSTALL_DIR="$install_directory" \
+            /bin/sh "$installer"
+
+          # installed-cli-smoke:start
+          test -x "$install_directory/understudy"
+          env -i HOME="$test_home" USERPROFILE="$test_home" \
+            PATH="$install_directory:/usr/bin:/bin" TMPDIR="$test_home" \
+            /bin/sh -eu -c '
+              cd "$HOME"
+              test "$(command -v understudy)" = "$1/understudy"
+              # runtime-absence:start
+              for runtime in node bun; do
+                if command -v "$runtime" >/dev/null 2>&1; then
+                  echo "Unexpected runtime on the install-test PATH: $runtime" >&2
+                  exit 1
+                fi
+              done
+              # runtime-absence:end
+              test "$(understudy --version)" = "$2"
+              understudy --help > "$HOME/help.txt"
+              understudy --json auth status > "$HOME/auth.json"
+              status=0
+              understudy status --json > "$HOME/status.json" || status=$?
+              test "$status" = 1
+              understudy skills list --json > "$HOME/skills.json"
+              understudy skills install \
+                --directory "$HOME/agent skills" --json > "$HOME/installed-skills.json"
+              understudy skills install \
+                --directory "$HOME/agent skills" --json > "$HOME/repeated-skills.json"
+            ' sh "$install_directory" "$version"
+          grep -q 'login' "$test_home/help.txt"
+          grep -q 'skills' "$test_home/help.txt"
+          # unauthenticated-status:start
+          jq -e '
+            .authenticated == false and has("method") and .method == null and
+            .verification == "local" and .pending == false and
+            has("expiresAt") and .expiresAt == null
+          ' "$test_home/auth.json" >/dev/null
+          jq -e '.authenticated == false and .ready == false' "$test_home/status.json" >/dev/null
+          # unauthenticated-status:end
+          # installed-skills:start
+          jq -e --arg version "$version" '
+            .cliVersion == $version and (.skills | length) > 0 and
+            ([.skills[].name] | unique | length) == (.skills | length) and
+            ([.skills[].name] | index("setup-understudy") != null and index("build-evals") != null) and
+            all(.skills[];
+              (.name | test("^[a-z0-9]+(-[a-z0-9]+)*$")) and
+              (.version | test("^[a-f0-9]{64}$")) and
+              .entrypoint == "SKILL.md" and (.files | length) > 0 and
+              ([.files[].path] | unique | length) == (.files | length) and
+              ([.files[].path] | index("SKILL.md") != null) and
+              all(.files[];
+                (.sha256 | test("^[a-f0-9]{64}$")) and
+                (.path | test("^[A-Za-z0-9_./-]+$")) and
+                all(.path | split("/")[]; . != "" and . != "." and . != "..")
+              )
+            )
+          ' "$test_home/skills.json" >/dev/null
+          skill_root="$test_home/agent skills"
+          for result in installed repeated; do
+            expected_status=installed
+            if [ "$result" = repeated ]; then expected_status=unchanged; fi
+            jq -e --slurpfile listed "$test_home/skills.json" \
+              --arg directory "$skill_root" --arg expected_status "$expected_status" '
+                $listed[0].skills as $catalog |
+                .cliVersion == $listed[0].cliVersion and .directory == $directory and
+                ([.skills[].name] | sort) == ([$catalog[].name] | sort) and
+                all(.skills[];
+                  . as $installed | ($catalog[] | select(.name == $installed.name)) as $skill |
+                  .version == $skill.version and .status == $expected_status and
+                  .directory == ($directory + "/" + .name) and
+                  .entrypoint == (.directory + "/SKILL.md") and .files == $skill.files
+                )
+              ' "$test_home/$result-skills.json" >/dev/null
+          done
+          test "$(find "$skill_root" -type f | wc -l | tr -d ' ')" = \
+            "$(jq '[.skills[].files | length] | add' "$test_home/skills.json")"
+          test -z "$(find "$skill_root" -type l -print)"
+          while IFS=$'\t' read -r skill_name skill_file expected_digest; do
+            test -f "$skill_root/$skill_name/$skill_file"
+            test "$(shasum -a 256 "$skill_root/$skill_name/$skill_file" | awk '{ print $1 }')" = "$expected_digest"
+          done < <(jq -r '.skills[] | .name as $name | .files[] | [$name, .path, .sha256] | @tsv' "$test_home/skills.json")
+          # installed-skills:end
+          test ! -e "$test_home/.understudy"
+          # installed-cli-smoke:end
+
+          cleanup_test_home
+          trap - EXIT HUP INT TERM

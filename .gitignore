@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.tgz
+*.log
+.DS_Store
+.env*
+.npmrc
+.understudy/
+/artifacts/
+/src/skills/bundle.generated.ts
