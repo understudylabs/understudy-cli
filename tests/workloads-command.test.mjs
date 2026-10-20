@@ -112,6 +112,41 @@ test("workloads create defaults capture off and enables it only with --capture",
     "--capture",
   ]);
   assert.equal(withCapture.calls[0].input.capture, true);
+  assert.match(withCapture.output[0], /x-understudy-project: synthetic-project/);
+  assert.match(withCapture.output[0], /x-understudy-workload: captured-workload/);
+  assert.match(withCapture.output[0], /x-understudy-session-id: <execution ID>/);
+  assert.match(withCapture.output[0], /Strongly recommended for session-level evaluation/);
+  assert.match(withCapture.output[0], /required for online model experiments/);
+  assert.match(withCapture.output[0], /x-understudy-turn-id: <turn ID>/);
+  assert.match(withCapture.output[0], /x-understudy-tags: \{"cohort":"trial"\}/);
+  assert.match(withCapture.output[0], /tool continuations, and retries/);
+  assert.match(withCapture.output[0], /Tags select cohorts; the session ID groups calls/);
+  assert.match(withCapture.output[0], /A one-shot session has one turn/);
+  assert.match(withCapture.output[0], /A new model call does not by itself mean a new turn/);
+});
+
+test("workload creation JSON names per-request metadata without sending it in the create input", async () => {
+  const { program, calls, output } = programFor();
+  await program.parseAsync(["node", "understudy", "--json", "workloads", "create", "new-workload"]);
+
+  assert.deepEqual(calls[0].input, {
+    project: undefined,
+    name: "new-workload",
+    capture: false,
+  });
+  const result = JSON.parse(output[0]);
+  assert.deepEqual(result.integration.headers, {
+    "x-understudy-project": project.slug,
+    "x-understudy-workload": "new-workload",
+  });
+  assert.deepEqual(result.integration.perRequestHeaders, {
+    sessionId: "x-understudy-session-id",
+    turnId: "x-understudy-turn-id",
+    tags: "x-understudy-tags",
+  });
+  assert.match(result.integration.guidance.sessionId, /required for online model experiments/);
+  assert.match(result.integration.guidance.turnId, /use the session ID as its turn ID, or omit the turn ID/);
+  assert.match(result.integration.guidance.tags, /every call in the session/);
 });
 
 test("workloads show supports global JSON output", async () => {

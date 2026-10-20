@@ -30,6 +30,7 @@ const reviewedFiles = {
     "references/mastra.md",
     "references/openai-compatible.md",
     "references/request-correlation.md",
+    "references/session-turn-ids.md",
     "references/vercel-ai-sdk.md",
   ],
   "try-models": [

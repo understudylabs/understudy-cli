@@ -150,6 +150,10 @@ request metadata remains available without it. During setup, choose retention
 for the intended traffic rather than copying settings from unrelated workloads.
 See the [resource command guide](docs/resource-commands.md).
 
+`workloads create` prints the project and workload request headers, strongly
+recommends session IDs for session-level evaluation, and explains turn IDs and
+tags for the application's model calls.
+
 ### Inspect traffic, usage, and billing
 
 | Group | Subcommands | What you can learn |

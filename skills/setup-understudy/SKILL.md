@@ -112,6 +112,8 @@ Produce a compact inventory with:
 - existing project/workload mapping, if any;
 - the application's own job/record/conversation IDs, existing durable call logs
   or storage, and whether each inference attempt retains its Understudy request ID;
+- session and logical-turn boundaries, existing IDs with those lifetimes, and
+  how context reaches continuations, retries, fallbacks and background jobs;
 - owning process, deployment/environment and runtime configuration source;
 - a bounded application trigger, its environment and external effects; and
 - supported, unsupported or unresolved status with the reason.
@@ -149,6 +151,8 @@ changing capture, activating traffic or sending live probes, show one compact pl
 - task purpose, call sites, proposed workload name and boundary for each task;
 - affected code/configuration, preserved SDK/protocol/models and existing routes;
 - credential delivery destination, capture choice and any effect on reused traffic;
+- session/turn attribution: chosen boundaries, ID sources, propagation changes
+  and any unresolved paths;
 - request-ID storage: current coverage, proposed destination and changes, and the
   user's explicit Yes / No / Do it later decision described below;
 - local/production scope, requested commits, restart/deploy steps, and restoration;
@@ -391,6 +395,21 @@ Preserve model selection, protocol, prompts, tools, schemas, streaming consumers
 retries, timeouts, cancellation and parsing. Use existing configuration validation
 rather than adding a new configuration framework.
 
+### Attach session and turn IDs
+
+Follow [session and turn attribution](references/session-turn-ids.md) alongside
+the SDK reference. Strongly recommend `x-understudy-session-id` for grouping an
+execution's model calls; online model experiments require it for stable
+assignment. Use `x-understudy-turn-id` for a logical step within that session.
+A new model request does not automatically mean a new turn.
+
+Reuse suitable application IDs and propagate them through request-scoped
+options, including tool continuations, retries, fallbacks and resumed jobs.
+Never mutate a shared client's default headers to switch sessions. If suitable
+boundaries or propagation hooks cannot be established, record the gap rather
+than inventing new IDs per call or claiming complete attribution. These request
+headers are distinct from retaining the gateway's per-request response ID below.
+
 ### Ask whether to keep request IDs with the application's records
 
 Inspect the inference wrapper's success, error, streaming and retry paths, then
@@ -466,6 +485,10 @@ gateway key fails configuration rather than silently bypassing the gateway.
 Check the emitted project slug and workload name against the resolved mapping;
 using the same incorrect ID in both configuration and a test expectation proves
 only that the header was forwarded.
+Use the [session/turn checks](references/session-turn-ids.md#verify-and-report)
+to verify stable IDs within a turn, changed IDs at the right boundaries and
+isolation across concurrent executions. Sending headers locally does not prove
+that the deployed gateway retained them; report hosted verification separately.
 For approved request-correlation changes, use synthetic transport responses to
 check success, HTTP error, streaming failure/cancellation, retry and missing-header paths that
 the application supports. Verify the stored association with the correct app
