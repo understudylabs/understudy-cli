@@ -648,7 +648,7 @@ function assertBundledSkills(binary, environment, scratch) {
     "compare-models": ["SKILL.md", "references/bundled-comparison.md", "references/comparison-view.md", "references/demo.md", "scripts/compare.mjs", "scripts/present.mjs", "templates/demo-adapter.mjs"],
     "setup-understudy": [
       "SKILL.md", "references/anthropic-messages.md", "references/mastra.md",
-      "references/openai-compatible.md", "references/request-correlation.md", "references/vercel-ai-sdk.md",
+      "references/openai-compatible.md", "references/request-correlation.md", "references/session-turn-ids.md", "references/vercel-ai-sdk.md",
     ],
     "try-models": ["SKILL.md", "references/spot-check-view.md", "references/upgrade.md"],
     "recommend-models": ["SKILL.md", "references/model-facts.md", "references/task-cost.md"],
