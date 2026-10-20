@@ -7,7 +7,7 @@ import test from "node:test";
 import { createSkillBundle, writeSkillBundle } from "../scripts/bundle-skills.mjs";
 
 const references = {
-  "setup-understudy": ["anthropic-messages", "mastra", "openai-compatible", "request-correlation", "vercel-ai-sdk"],
+  "setup-understudy": ["anthropic-messages", "mastra", "openai-compatible", "request-correlation", "session-turn-ids", "vercel-ai-sdk"],
   "try-models": ["spot-check-view", "upgrade"],
   "recommend-models": ["model-facts", "task-cost"],
   "rollout-workload": [],

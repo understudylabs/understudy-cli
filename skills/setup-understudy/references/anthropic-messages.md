@@ -115,6 +115,10 @@ Do not create a new client for every request solely to change metadata.
 
 ## Preserve behavior
 
+Follow [session and turn attribution](session-turn-ids.md) for execution IDs.
+Use per-request `headers` in TypeScript or `extra_headers` in Python, preserve
+existing headers, and never place changing IDs in shared defaults.
+
 Change only the authentication reference, base URL, and Understudy metadata
 needed for the approved calls. Preserve:
 

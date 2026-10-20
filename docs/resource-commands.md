@@ -16,6 +16,7 @@ accept an id. A selector that matches multiple resources is an error.
 | `projects delete <project> --confirm` | Soft-delete the selected project. |
 | `projects switch <project>` (alias `use`) | Verify and save the project as the current directory context. |
 | `projects ensure-default` | Idempotently provision the canonical rehearsal project and default workload. |
+| `workloads create <name> --project <project> [--capture]` | Create a workload and print its request-header integration recipe. |
 | `workloads update <workload> --project <project> --capture-sample-rate <rate>` | Set capture sampling between 0 and 1 independently of the capture enabled flag. |
 | `workloads route <workload> --model-id <model> [--traffic-pct <percent>]` | Explicitly route the selected workload to a public model, defaulting to 10 percent. |
 | `workloads route <workload> --clear` | Clear its model route. |
@@ -41,6 +42,34 @@ capture by platform default; use `--capture off` to opt out. Clearing leaves
 capture unchanged unless `--capture on|off` is explicit. Percentages must be
 integers from 0 to 100. Clearing cannot be combined with model or percentage
 options. Responses must echo the requested model, workload, project, and share.
+
+Workload creation prints the project and workload headers to send with inference
+requests. It strongly recommends `x-understudy-session-id` for session-level
+evaluation: use one opaque, case-sensitive ID across every model call in an
+execution, including tool continuations and retries, and a new ID for each
+execution. Online model experiments require it to keep assignment stable.
+
+A **turn** is an application-defined step within a session: for example, one
+user message and the assistant work it triggers, or one agent step in a longer
+task. It may span several model requests, tool continuations, and retries. Send
+the same `x-understudy-turn-id` on those requests, and change it when the next
+logical step begins. A new model request is not automatically a new turn. A
+one-shot task is a one-turn session; the same value may be sent as both session
+and turn ID, or the turn header may be omitted. Both IDs must contain
+non-whitespace text and fit within 256 UTF-8 bytes. Neither ID signals that
+an execution or turn has completed; the application defines those boundaries.
+
+`x-understudy-tags` carries application-owned dimensions as a flat JSON object
+with string values, for example `{"cohort":"trial"}`. Tags can identify a
+user, account, or cohort for filtering and targeting. Choose keys from the
+application's own identifiers and avoid sensitive personal data. If an online
+experiment targets a tag, send the same key and value on every call in the
+session. Tags determine which sessions are eligible; the session ID groups
+calls and determines a stable experiment assignment. Tags alone do not measure
+quality: a session-level evaluation also needs a task outcome or verifier.
+The application supplies these headers with requests; workload creation does
+not store their values. `--json` returns header names and guidance in
+`integration`.
 
 The key-list API currently does not expose its upstream pagination cursor. The
 CLI therefore returns `completeness: "unknown"` and describes this limitation in

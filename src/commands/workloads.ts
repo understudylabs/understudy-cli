@@ -60,7 +60,7 @@ export function addWorkloadsCommands(
 
   workloads
     .command("create <name>")
-    .description("Create a workload with capture disabled by default.")
+    .description("Create a workload with capture disabled by default and show request metadata headers.")
     .option("--project <selector>", "Exact project id, slug, or name; defaults to saved context.")
     .option("--project-id <id>", "Alias for --project.")
     .option("--capture", "Enable capture for the new workload.")
@@ -75,7 +75,7 @@ export function addWorkloadsCommands(
         name,
         capture: options.capture === true,
       });
-      dependencies.output(formatWorkloadMutation(this, "Created", result));
+      dependencies.output(formatWorkloadCreation(this, result));
     });
 
   workloads
@@ -212,7 +212,7 @@ function formatWorkloadDetail(
 
 function formatWorkloadMutation(
   command: Command,
-  verb: "Created" | "Updated",
+  verb: "Updated",
   result: WorkloadResult,
 ): string {
   return formatOutput(
@@ -222,6 +222,43 @@ function formatWorkloadMutation(
       result.project.slug
     }. Capture is ${result.workload.captureEnabled ? "on" : "off"}.`,
   );
+}
+
+function formatWorkloadCreation(command: Command, result: WorkloadResult): string {
+  const guidance = {
+    sessionId: "Strongly recommended for session-level evaluation; required for online model experiments. Reuse it across an execution's calls, tool continuations, and retries; use a new ID for each execution.",
+    turnId: "A turn is one application-defined step within a session, such as one user message and the assistant work it triggers. It can span model calls, tool continuations, and retries. A one-shot session has one turn: use the session ID as its turn ID, or omit the turn ID.",
+    tags: "App-owned labels such as user_id, account_id, or cohort. Send a flat JSON string map on each relevant call; a tag used to target an experiment must be present on every call in the session.",
+  };
+  const integration = {
+    headers: {
+      "x-understudy-project": result.project.slug,
+      "x-understudy-workload": result.workload.name,
+    },
+    perRequestHeaders: {
+      sessionId: "x-understudy-session-id",
+      turnId: "x-understudy-turn-id",
+      tags: "x-understudy-tags",
+    },
+    guidance,
+  };
+  return formatOutput(command, { ...result, integration }, [
+    `Created workload ${result.workload.name} in project ${result.project.slug}. Capture is ${result.workload.captureEnabled ? "on" : "off"}.`,
+    "Send these headers on each model request:",
+    `  x-understudy-project: ${result.project.slug}`,
+    `  x-understudy-workload: ${result.workload.name}`,
+    "Strongly recommended for session-level evaluation (required for online model experiments):",
+    "  x-understudy-session-id: <execution ID>",
+    "For multiple steps within a session, identify each logical turn:",
+    "  x-understudy-turn-id: <turn ID>",
+    "Add tags to select and compare the users or cohorts you care about:",
+    '  x-understudy-tags: {"cohort":"trial"}',
+    guidance.sessionId,
+    guidance.turnId,
+    guidance.tags,
+    "A new model call does not by itself mean a new turn.",
+    "Tags select cohorts; the session ID groups calls and keeps an experiment assignment stable.",
+  ]);
 }
 
 function formatRouting(workload: WorkloadResult["workload"]): string {
