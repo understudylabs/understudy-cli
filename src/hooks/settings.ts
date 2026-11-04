@@ -57,19 +57,22 @@ type Settings = Record<string, unknown>;
 type HookGroup = { matcher?: string; hooks?: Array<{ type?: string; command?: string }> };
 
 /**
- * Claude Code runs the hook on each prompt and after each shell command, the
- * only places git state changes before its next model request. `async` keeps
- * the hook off the agent's path.
+ * Claude Code runs the hook on each prompt and after each shell command,
+ * failed ones included (a commit can precede the failure), the only places
+ * git state changes before its next model request. Windows sessions run
+ * shell commands as `PowerShell`. `async` keeps the hook off the agent's path.
  */
 export function withGitStateHooks(settings: Settings, command: string): Settings {
   const handler = { type: "command", command, timeout: 10, async: true };
+  const shell = { matcher: "Bash|PowerShell", hooks: [handler] };
   const hooks = withoutGitStateHooks(settings).hooks as Record<string, HookGroup[]> | undefined;
   return {
     ...settings,
     hooks: {
       ...hooks,
       UserPromptSubmit: [...(hooks?.UserPromptSubmit ?? []), { hooks: [handler] }],
-      PostToolUse: [...(hooks?.PostToolUse ?? []), { matcher: "Bash", hooks: [handler] }],
+      PostToolUse: [...(hooks?.PostToolUse ?? []), shell],
+      PostToolUseFailure: [...(hooks?.PostToolUseFailure ?? []), shell],
     },
   };
 }

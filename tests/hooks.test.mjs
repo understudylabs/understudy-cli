@@ -42,6 +42,7 @@ function memorySessions(initial = {}) {
       write: async (value) => void sessions.set(id, value),
       clear: async () => void sessions.delete(id),
     }),
+    lockSession: async (_id, operation) => operation(),
     pruneSessionStates: async (olderThanMs) => {
       pruned.push(olderThanMs);
       for (const [id, session] of sessions) if (session.lastSeenMs < olderThanMs) sessions.delete(id);
@@ -62,6 +63,7 @@ function dependencies({ git = {}, state, fetchImplementation, credential, input,
     readInput: async () => input ?? JSON.stringify({ session_id: sessionId, cwd: "/synthetic/repo", hook_event_name: "PostToolUse" }),
     git: async (_cwd, args) => (args.join(" ") in answers ? answers[args.join(" ")] : null),
     sessionState: state.sessionState,
+    lockSession: state.lockSession,
     pruneSessionStates: state.pruneSessionStates,
     credential: async () => (credential === undefined ? { apiKey: syntheticKey, organizationId: "org_synthetic" } : credential),
     fetchImplementation,
@@ -162,6 +164,15 @@ test("forgets other sessions untouched for two weeks when a new one starts", asy
   assert.deepEqual(state.pruned, [86_400_000]);
 });
 
+test("skips remembering the state when the session's lock can't be had", async () => {
+  const state = memorySessions();
+  const { calls, fetchImplementation } = recordingFetch();
+  const deps = { ...dependencies({ state, fetchImplementation }), lockSession: async () => undefined };
+  assert.equal(await reportGitState({ harness: "claude_code", apiUrl: "https://api.example.test" }, deps), "recorded");
+  assert.equal(calls.length, 1);
+  assert.equal(state.sessions.size, 0);
+});
+
 test("never replaces a newer look at the session with an older one", async () => {
   const newer = { version: 1, repo: "github.com/acme/widgets", branch: "feature-a", headSha: sha("a"), lastSeenMs: 2_000_000 };
   const state = memorySessions({ [sessionId]: newer });
@@ -200,11 +211,13 @@ test("installs the hooks once, keeping every other setting and hook", async (t) 
   const installed = JSON.parse(await readFile(file, "utf8"));
   assert.equal(installed.model, "opus");
   assert.deepEqual(installed.hooks.Stop, [{ hooks: [other] }]);
+  const handler = { type: "command", command, timeout: 10, async: true };
   assert.deepEqual(installed.hooks.PostToolUse, [
     { matcher: "Edit", hooks: [other] },
-    { matcher: "Bash", hooks: [{ type: "command", command, timeout: 10, async: true }] },
+    { matcher: "Bash|PowerShell", hooks: [handler] },
   ]);
-  assert.deepEqual(installed.hooks.UserPromptSubmit, [{ hooks: [{ type: "command", command, timeout: 10, async: true }] }]);
+  assert.deepEqual(installed.hooks.PostToolUseFailure, [{ matcher: "Bash|PowerShell", hooks: [handler] }]);
+  assert.deepEqual(installed.hooks.UserPromptSubmit, [{ hooks: [handler] }]);
   assert.equal((await stat(file)).mode & 0o777, 0o640);
   assert.deepEqual((await readdir(directory)).sort(), ["settings.json"]);
 

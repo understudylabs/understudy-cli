@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, readdir, unlink } from "node:fs/promises";
+import { lstat, mkdir, readdir, rmdir, unlink } from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -26,7 +27,7 @@ import {
 } from "../hooks/settings.js";
 import { createInferenceCredentialStore } from "../inference/credentials.js";
 import { formatOutput } from "../output.js";
-import { createPrivateJsonStore } from "../storage/private-json.js";
+import { createPrivateJsonStore, ensurePrivateDirectory } from "../storage/private-json.js";
 
 const execute = promisify(execFile);
 const hookInputMaxBytes = 256 * 1024;
@@ -105,10 +106,32 @@ export function createGitStateDependencies(): GitStateDependencies {
     sessionState: (sessionId) =>
       createPrivateJsonStore({
         directory,
-        fileName: `${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}.json`,
+        fileName: `${sessionFile(sessionId)}.json`,
         label: "work hook state",
         schema: sessionStateSchema,
       }),
+    // mkdir is atomic: whoever creates the directory holds the lock. A lock
+    // older than a hook's timeout belongs to a process that died.
+    lockSession: async (sessionId, operation) => {
+      await ensurePrivateDirectory(directory);
+      const lock = path.join(directory, `${sessionFile(sessionId)}.lock`);
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        try {
+          await mkdir(lock, { mode: 0o700 });
+        } catch {
+          const entry = await lstat(lock).catch(() => null);
+          if (entry && Date.now() - entry.mtimeMs > 10_000) await rmdir(lock).catch(() => undefined);
+          await sleep(25);
+          continue;
+        }
+        try {
+          return await operation();
+        } finally {
+          await rmdir(lock).catch(() => undefined);
+        }
+      }
+      return undefined;
+    },
     pruneSessionStates: async (olderThanMs) => {
       for (const name of await readdir(directory).catch(() => [])) {
         if (!name.endsWith(".json")) continue;
@@ -126,6 +149,10 @@ export function createGitStateDependencies(): GitStateDependencies {
       ]);
     },
   };
+}
+
+function sessionFile(sessionId: string): string {
+  return createHash("sha256").update(sessionId).digest("hex").slice(0, 32);
 }
 
 function readStdin(maxBytes: number, timeoutMs: number): Promise<string> {

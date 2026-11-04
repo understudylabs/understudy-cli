@@ -27,6 +27,8 @@ export interface GitStateDependencies {
   git(cwd: string, args: readonly string[]): Promise<string | null>;
   /** One file per session, so concurrent hooks of different sessions never collide. */
   sessionState(sessionId: string): PrivateJsonStore<SessionState>;
+  /** Runs `operation` while holding the session's lock; undefined when it can't be had. */
+  lockSession<T>(sessionId: string, operation: () => Promise<T>): Promise<T | undefined>;
   pruneSessionStates(olderThanMs: number): Promise<void>;
   credential(): Promise<HookCredential | null>;
   fetchImplementation?: typeof fetch;
@@ -60,10 +62,11 @@ export async function reportGitState(
     const previous = await store.read();
     const current: SessionState = { version: 1, repo, branch, headSha: sha, lastSeenMs: observedAt };
     // Async hooks run concurrently; never replace a newer look at this session.
-    const remember = async () => {
-      const latest = await store.read();
-      if (!latest || latest.lastSeenMs <= observedAt) await store.write(current);
-    };
+    const remember = () =>
+      dependencies.lockSession(input.sessionId, async () => {
+        const latest = await store.read();
+        if (!latest || latest.lastSeenMs <= observedAt) await store.write(current);
+      });
     if (previous && previous.repo === repo && previous.branch === branch && previous.headSha === sha) {
       await remember();
       return "unchanged";

@@ -1,9 +1,9 @@
 # Work hooks
 
-`understudy hooks install` adds two command hooks to Claude Code's settings
+`understudy hooks install` adds command hooks to Claude Code's settings
 (`--settings <file>`, else `$CLAUDE_CONFIG_DIR/settings.json`, else
 `~/.claude/settings.json`). Claude Code runs them on each prompt and after each
-shell command. Understudy uses what they report to show what each pull request
+shell command (`Bash` or `PowerShell`), including failed ones. Understudy uses what they report to show what each pull request
 cost: a request belongs to the pull request holding the next commit its
 session made.
 
