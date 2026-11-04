@@ -31,24 +31,26 @@ async function fixture(t) {
   return directory;
 }
 
-function memoryStore(initial = null) {
-  const store = { value: initial, writes: 0 };
+function memorySessions(initial = {}) {
+  const sessions = new Map(Object.entries(initial));
+  const pruned = [];
   return {
-    store,
-    state: {
-      read: async () => store.value,
-      write: async (value) => {
-        store.value = value;
-        store.writes += 1;
-      },
-      clear: async () => {
-        store.value = null;
-      },
+    sessions,
+    pruned,
+    sessionState: (id) => ({
+      read: async () => sessions.get(id) ?? null,
+      write: async (value) => void sessions.set(id, value),
+      clear: async () => void sessions.delete(id),
+    }),
+    pruneSessionStates: async (olderThanMs) => {
+      pruned.push(olderThanMs);
+      for (const [id, session] of sessions) if (session.lastSeenMs < olderThanMs) sessions.delete(id);
     },
   };
 }
 
 function dependencies({ git = {}, state, fetchImplementation, credential, input, now = 1_000_000 }) {
+  state ??= memorySessions();
   const answers = {
     "log -1 --format=%H%x00%ct": `${sha("a")}\u0000990`,
     "symbolic-ref -q --short HEAD": "feature-a",
@@ -59,7 +61,8 @@ function dependencies({ git = {}, state, fetchImplementation, credential, input,
     now: () => now,
     readInput: async () => input ?? JSON.stringify({ session_id: sessionId, cwd: "/synthetic/repo", hook_event_name: "PostToolUse" }),
     git: async (_cwd, args) => (args.join(" ") in answers ? answers[args.join(" ")] : null),
-    state,
+    sessionState: state.sessionState,
+    pruneSessionStates: state.pruneSessionStates,
     credential: async () => (credential === undefined ? { apiKey: syntheticKey, organizationId: "org_synthetic" } : credential),
     fetchImplementation,
   };
@@ -86,7 +89,7 @@ test("normalizes every remote form of one repository, without credentials", () =
 });
 
 test("reports a session's first git state, then only changes", async () => {
-  const { store, state } = memoryStore();
+  const state = memorySessions();
   const { calls, fetchImplementation } = recordingFetch();
 
   assert.equal(await reportGitState({ harness: "claude_code", apiUrl: "https://api.example.test" }, dependencies({ state, fetchImplementation })), "recorded");
@@ -108,7 +111,7 @@ test("reports a session's first git state, then only changes", async () => {
   // Unchanged: no request, but the session's last look moves forward.
   assert.equal(await reportGitState({ harness: "claude_code", apiUrl: "https://api.example.test" }, dependencies({ state, fetchImplementation, now: 1_005_000 })), "unchanged");
   assert.equal(calls.length, 1);
-  assert.equal(store.value.sessions[sessionId].lastSeenMs, 1_005_000);
+  assert.equal(state.sessions.get(sessionId).lastSeenMs, 1_005_000);
 
   // A new commit is reported with when the previous state was last seen.
   const changed = dependencies({ state, fetchImplementation, now: 1_010_000, git: { "log -1 --format=%H%x00%ct": `${sha("b")}\u00001008` } });
@@ -118,7 +121,7 @@ test("reports a session's first git state, then only changes", async () => {
 });
 
 test("reports a detached HEAD with no branch and a repository with no origin", async () => {
-  const { state } = memoryStore();
+  const state = memorySessions();
   const { calls, fetchImplementation } = recordingFetch();
   const detached = dependencies({ state, fetchImplementation, git: { "symbolic-ref -q --short HEAD": null, "config --get remote.origin.url": null } });
   assert.equal(await reportGitState({ harness: "claude_code", apiUrl: "https://api.example.test" }, detached), "recorded");
@@ -127,11 +130,11 @@ test("reports a detached HEAD with no branch and a repository with no origin", a
 });
 
 test("keeps a failed report so the next hook sends it again", async () => {
-  const { store, state } = memoryStore();
+  const state = memorySessions();
   const { calls, fetchImplementation } = recordingFetch(500);
   assert.equal(await reportGitState({ harness: "claude_code", apiUrl: "https://api.example.test" }, dependencies({ state, fetchImplementation })), "failed");
   assert.equal(calls.length, 1);
-  assert.equal(store.value, null);
+  assert.equal(state.sessions.size, 0);
   const throwing = async () => {
     throw new Error("offline");
   };
@@ -139,7 +142,7 @@ test("keeps a failed report so the next hook sends it again", async () => {
 });
 
 test("skips without a usable hook input, a repository, or a credential", async () => {
-  const { state } = memoryStore();
+  const state = memorySessions();
   const { calls, fetchImplementation } = recordingFetch();
   const options = { harness: "claude_code", apiUrl: "https://api.example.test" };
   for (const input of ["not json", "{}", JSON.stringify({ session_id: "has space", cwd: "/x" }), JSON.stringify({ session_id: sessionId, cwd: "relative" })]) {
@@ -150,12 +153,21 @@ test("skips without a usable hook input, a repository, or a credential", async (
   assert.equal(calls.length, 0);
 });
 
-test("forgets sessions after two weeks", async () => {
-  const old = { repo: "", branch: "", headSha: sha("c"), lastSeenMs: 0 };
-  const { store, state } = memoryStore({ version: 1, sessions: { "old-session": old } });
+test("forgets other sessions untouched for two weeks when a new one starts", async () => {
+  const old = { version: 1, repo: "", branch: "", headSha: sha("c"), lastSeenMs: 0 };
+  const state = memorySessions({ "old-session": old });
   const { fetchImplementation } = recordingFetch();
   await reportGitState({ harness: "claude_code", apiUrl: "https://api.example.test" }, dependencies({ state, fetchImplementation, now: 15 * 86_400_000 }));
-  assert.deepEqual(Object.keys(store.value.sessions), [sessionId]);
+  assert.deepEqual([...state.sessions.keys()], [sessionId]);
+  assert.deepEqual(state.pruned, [86_400_000]);
+});
+
+test("never replaces a newer look at the session with an older one", async () => {
+  const newer = { version: 1, repo: "github.com/acme/widgets", branch: "feature-a", headSha: sha("a"), lastSeenMs: 2_000_000 };
+  const state = memorySessions({ [sessionId]: newer });
+  const { fetchImplementation } = recordingFetch();
+  assert.equal(await reportGitState({ harness: "claude_code", apiUrl: "https://api.example.test" }, dependencies({ state, fetchImplementation })), "unchanged");
+  assert.equal(state.sessions.get(sessionId).lastSeenMs, 2_000_000);
 });
 
 test("uses an Understudy key from the environment, never a provider key", () => {
@@ -218,8 +230,11 @@ test("finds Claude Code settings and quotes the hook command", () => {
     "'/usr/bin/node' '/opt/cli/bin.js' 'hooks' 'git-state' '--harness' 'claude_code' '--api-url' 'http://localhost:8789'",
   );
   assert.throws(() => gitStateCommand(["/opt/it's/understudy"], undefined), CliError);
-  assert.deepEqual(cliEntry("/usr/bin/node", "/opt/cli/dist/bin.js"), ["/usr/bin/node", "/opt/cli/dist/bin.js"]);
-  assert.deepEqual(cliEntry("/opt/understudy/understudy", "/$bunfs/root/understudy"), ["/opt/understudy/understudy"]);
+  const onDisk = (file) => file.startsWith("/opt/cli/") || file === "/usr/local/bin/understudy";
+  assert.deepEqual(cliEntry("/usr/bin/node", "/opt/cli/dist/bin.js", onDisk), ["/usr/bin/node", "/opt/cli/dist/bin.js"]);
+  // A package manager's bin link has no extension.
+  assert.deepEqual(cliEntry("/usr/bin/node", "/usr/local/bin/understudy", onDisk), ["/usr/bin/node", "/usr/local/bin/understudy"]);
+  assert.deepEqual(cliEntry("/opt/understudy/understudy", "/$bunfs/root/understudy", onDisk), ["/opt/understudy/understudy"]);
 });
 
 test("the hook command reports a real repository's state and prints nothing", async (t) => {
@@ -270,10 +285,12 @@ test("the hook command reports a real repository's state and prints nothing", as
     { ...received[0].body, observed_at_ms: 0, head_committed_at_ms: 0 },
     { harness: "claude_code", session_id: sessionId, observed_at_ms: 0, prev_seen_at_ms: null, repo: "github.com/acme/widgets", branch: "feature-a", head_sha: head, head_committed_at_ms: 0 },
   );
-  assert.equal((await stat(path.join(home, ".understudy", "work-hook-state.json"))).mode & 0o777, 0o600);
+  const [stateFile] = await readdir(path.join(home, ".understudy", "work-hooks"));
+  assert.match(stateFile, /^[0-9a-f]{32}\.json$/);
+  assert.equal((await stat(path.join(home, ".understudy", "work-hooks", stateFile))).mode & 0o777, 0o600);
 
   // An unreachable service changes nothing the agent can see.
-  await chmod(path.join(home, ".understudy"), 0o700);
+  await chmod(path.join(home, ".understudy", "work-hooks"), 0o700);
   server.close();
   git("commit", "-q", "--allow-empty", "-m", "synthetic two");
   assert.deepEqual(await run(), { code: 0, output: "" });

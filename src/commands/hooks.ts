@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { lstat, readdir, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -7,8 +9,8 @@ import { Command } from "commander";
 import { createCredentialStore } from "../auth/credentials.js";
 import { CliError } from "../errors.js";
 import {
-  hookStateSchema,
   reportGitState,
+  sessionStateSchema,
   resolveApiUrl,
   resolveHookCredential,
   type GitStateDependencies,
@@ -84,7 +86,7 @@ an Understudy ANTHROPIC_API_KEY, or the one stored by understudy setup.
 }
 
 export function createGitStateDependencies(): GitStateDependencies {
-  const directory = path.join(homedir(), ".understudy");
+  const directory = path.join(homedir(), ".understudy", "work-hooks");
   const inferenceStore = createInferenceCredentialStore();
   const authStore = createCredentialStore();
   return {
@@ -100,12 +102,21 @@ export function createGitStateDependencies(): GitStateDependencies {
         return null;
       }
     },
-    state: createPrivateJsonStore({
-      directory,
-      fileName: "work-hook-state.json",
-      label: "work hook state",
-      schema: hookStateSchema,
-    }),
+    sessionState: (sessionId) =>
+      createPrivateJsonStore({
+        directory,
+        fileName: `${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}.json`,
+        label: "work hook state",
+        schema: sessionStateSchema,
+      }),
+    pruneSessionStates: async (olderThanMs) => {
+      for (const name of await readdir(directory).catch(() => [])) {
+        if (!name.endsWith(".json")) continue;
+        const file = path.join(directory, name);
+        const entry = await lstat(file).catch(() => null);
+        if (entry?.isFile() && entry.mtimeMs < olderThanMs) await unlink(file).catch(() => undefined);
+      }
+    },
     credential: async () => {
       const inference = await inferenceStore.read().catch(() => null);
       const auth = await authStore.read().catch(() => null);

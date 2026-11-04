@@ -9,18 +9,11 @@ const shaPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const understudyKeyPattern = /^sk_[A-Za-z0-9_-]+$/;
 const localHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const stateRetentionMs = 14 * 24 * 60 * 60 * 1000;
-const stateMaxSessions = 500;
 
-export const hookStateSchema = z
-  .object({
-    version: z.literal(1),
-    sessions: z.record(
-      z.string(),
-      z.object({ repo: z.string(), branch: z.string(), headSha: z.string(), lastSeenMs: z.number() }).strict(),
-    ),
-  })
+export const sessionStateSchema = z
+  .object({ version: z.literal(1), repo: z.string(), branch: z.string(), headSha: z.string(), lastSeenMs: z.number() })
   .strict();
-export type HookState = z.infer<typeof hookStateSchema>;
+export type SessionState = z.infer<typeof sessionStateSchema>;
 
 export interface HookCredential {
   apiKey: string;
@@ -32,7 +25,9 @@ export interface GitStateDependencies {
   readInput(): Promise<string>;
   /** Trimmed stdout, or null when git fails. */
   git(cwd: string, args: readonly string[]): Promise<string | null>;
-  state: PrivateJsonStore<HookState>;
+  /** One file per session, so concurrent hooks of different sessions never collide. */
+  sessionState(sessionId: string): PrivateJsonStore<SessionState>;
+  pruneSessionStates(olderThanMs: number): Promise<void>;
   credential(): Promise<HookCredential | null>;
   fetchImplementation?: typeof fetch;
 }
@@ -61,11 +56,16 @@ export async function reportGitState(
     const remote = await dependencies.git(input.cwd, ["config", "--get", "remote.origin.url"]);
     const repo = (remote && normalizeGitRepo(remote)) ?? "";
 
-    const stored = (await dependencies.state.read()) ?? { version: 1 as const, sessions: {} };
-    const previous = stored.sessions[input.sessionId];
-    const current = { repo, branch, headSha: sha, lastSeenMs: observedAt };
+    const store = dependencies.sessionState(input.sessionId);
+    const previous = await store.read();
+    const current: SessionState = { version: 1, repo, branch, headSha: sha, lastSeenMs: observedAt };
+    // Async hooks run concurrently; never replace a newer look at this session.
+    const remember = async () => {
+      const latest = await store.read();
+      if (!latest || latest.lastSeenMs <= observedAt) await store.write(current);
+    };
     if (previous && previous.repo === repo && previous.branch === branch && previous.headSha === sha) {
-      await dependencies.state.write(pruned(stored, input.sessionId, current, observedAt));
+      await remember();
       return "unchanged";
     }
 
@@ -98,7 +98,8 @@ export async function reportGitState(
       z.object({ recorded: z.literal(true) }),
     );
     // Only a recorded change is remembered, so a failed one is sent again.
-    await dependencies.state.write(pruned(stored, input.sessionId, current, observedAt));
+    await remember();
+    if (!previous) await dependencies.pruneSessionStates(observedAt - stateRetentionMs);
     return "recorded";
   } catch {
     return "failed";
@@ -117,19 +118,6 @@ function parseHookInput(text: string): { sessionId: string; cwd: string } | null
   if (typeof sessionId !== "string" || !sessionIdPattern.test(sessionId)) return null;
   if (typeof cwd !== "string" || !cwd.startsWith("/") && !/^[A-Za-z]:\\/.test(cwd)) return null;
   return { sessionId, cwd };
-}
-
-function pruned(
-  state: HookState,
-  sessionId: string,
-  current: HookState["sessions"][string],
-  now: number,
-): HookState {
-  const sessions = Object.entries({ ...state.sessions, [sessionId]: current })
-    .filter(([, session]) => session.lastSeenMs >= now - stateRetentionMs)
-    .sort(([, a], [, b]) => b.lastSeenMs - a.lastSeenMs)
-    .slice(0, stateMaxSessions);
-  return { version: 1, sessions: Object.fromEntries(sessions) };
 }
 
 /**

@@ -35,6 +35,6 @@ only for localhost.
 
 The hook prints nothing and always exits 0, because Claude Code adds a hook's
 output to the model's context. A failed report leaves the local state
-unchanged, so the next hook sends it again. Local state is
-`~/.understudy/work-hook-state.json` (owner-only), holding each recent
-session's last reported state for 14 days.
+unchanged, so the next hook sends it again. Local state is one owner-only
+file per session in `~/.understudy/work-hooks/`, holding its last reported
+state; files untouched for 14 days are removed.

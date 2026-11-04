@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { lstat, open, readFile, rename, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,9 +40,17 @@ export function gitStateCommand(entry: readonly string[], apiUrl: string | undef
   return words.map((word) => `'${word}'`).join(" ");
 }
 
-/** How this process was started: the compiled binary, or node with the bundled script. */
-export function cliEntry(execPath = process.execPath, script = process.argv[1]): string[] {
-  return script && /\.(?:c|m)?js$/.test(script) ? [execPath, path.resolve(script)] : [execPath];
+/**
+ * How this process was started: node with its script (which a package
+ * manager's `bin` link may name without an extension), or the compiled
+ * binary, whose script path exists only inside it.
+ */
+export function cliEntry(
+  execPath = process.execPath,
+  script = process.argv[1],
+  exists: (file: string) => boolean = existsSync,
+): string[] {
+  return script && exists(script) ? [execPath, path.resolve(script)] : [execPath];
 }
 
 type Settings = Record<string, unknown>;
