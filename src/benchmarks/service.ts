@@ -79,6 +79,7 @@ export interface BenchmarkShowInput {
   project?: string;
   workload?: string;
   includeReport?: boolean;
+  expectPublication?: string;
 }
 
 export interface BenchmarkShowResult {
@@ -135,6 +136,9 @@ export function createBenchmarksService(options: ManagementScopeOptions): Benchm
           (result.benchmark && (result.benchmark.project_id !== project!.id || result.benchmark.workload_id !== workload!.id)) ||
           (result.publication && (result.publication.org_id !== session.organizationId || result.publication.project_id !== project!.id || result.publication.workload_id !== workload!.id))) {
         throw new CliError("Understudy returned a benchmark outside the selected workload.");
+      }
+      if (input.expectPublication && result.publication?.id !== input.expectPublication) {
+        throw new CliError("The published benchmark has changed. Refresh the dashboard and copy the agent handoff again.");
       }
       const report = result.benchmark?.report;
       return {

@@ -50,6 +50,12 @@ test("benchmarks show gives an agent the full JSON report only when requested", 
   assert.equal(JSON.parse(output[0]).benchmark.report.prompt_change.diff[0], "Invented prompt line");
 });
 
+test("benchmarks show forwards the publication pin", async () => {
+  const { program, calls } = setup();
+  await program.parseAsync(["node", "understudy", "benchmarks", "show", "--expect-publication", "synthetic-publication"]);
+  assert.deepEqual(calls, [{ expectPublication: "synthetic-publication" }]);
+});
+
 test("benchmarks list prints available publications", async () => {
   const { program, output } = setup();
   await program.parseAsync(["node", "understudy", "benchmarks", "list"]);
