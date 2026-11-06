@@ -103,6 +103,25 @@ test("benchmark detail exposes an explicit empty state", async () => {
   assert.equal(result.manifestBytes, null);
 });
 
+test("benchmark detail refuses a replaced or missing publication when pinned", async () => {
+  const service = fixture(async (input) => responseFor(input));
+  const current = await service.show({ project: projectId, workload: workloadId, expectPublication: publication.id });
+  assert.equal(current.publication.id, publication.id);
+  await assert.rejects(
+    service.show({ project: projectId, workload: workloadId, expectPublication: "synthetic-older-publication", includeReport: true }),
+    /published benchmark has changed/,
+  );
+  await assert.rejects(
+    service.show({ project: projectId, workload: workloadId, expectPublication: "" }),
+    /Expected publication id must not be empty/,
+  );
+  await assert.rejects(
+    fixture(async (input) => responseFor(input, { benchmark: null, publication: null }))
+      .show({ project: projectId, workload: workloadId, expectPublication: publication.id }),
+    /published benchmark has changed/,
+  );
+});
+
 test("benchmark detail rejects another workload's response", async () => {
   await assert.rejects(
     fixture(async (input) => responseFor(input, {
