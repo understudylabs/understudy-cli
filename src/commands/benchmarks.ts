@@ -30,7 +30,8 @@ export function addBenchmarksCommands(
     .option("--project <selector>", "Exact project id, slug, or name; defaults to saved context.")
     .option("--workload <selector>", "Exact workload id or name; defaults to saved context.")
     .option("--include-report", "Include the full benchmark manifest, which may contain customer prompt and eval content.")
-    .action(async function (this: Command, options: { project?: string; workload?: string; includeReport?: boolean }) {
+    .option("--expect-publication <id>", "Require this exact publication; fail if the current benchmark changed.")
+    .action(async function (this: Command, options: { project?: string; workload?: string; includeReport?: boolean; expectPublication?: string }) {
       const result = await service.show(options);
       output(formatBenchmark(this, result, options.includeReport === true));
     });
