@@ -112,6 +112,22 @@ test("benchmark detail rejects another workload's response", async () => {
   );
 });
 
+test("benchmark detail does not claim a missing or malformed prompt diff", async () => {
+  const noChange = { ...benchmark, report: { ...benchmark.report, prompt_change: undefined } };
+  const result = await fixture(async (input) => responseFor(input, { benchmark: noChange, publication }))
+    .show({ project: projectId, workload: workloadId });
+  assert.equal(result.hasPromptDiff, false);
+
+  for (const promptChange of [null, {}, { diff: [] }]) {
+    const invalid = { ...benchmark, report: { ...benchmark.report, prompt_change: promptChange } };
+    await assert.rejects(
+      fixture(async (input) => responseFor(input, { benchmark: invalid, publication }))
+        .show({ project: projectId, workload: workloadId }),
+      /invalid response for benchmark read/,
+    );
+  }
+});
+
 test("benchmark listing validates publication scope", async () => {
   const listed = await fixture(async (input) => {
     assert.equal(new URL(String(input)).pathname, `/admin/v1/orgs/${orgId}/benchmarks`);

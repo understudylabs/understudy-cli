@@ -52,6 +52,13 @@ const manifestSchema = z.object({
       role: z.enum(["current", "recommended", "compared"]),
       score: z.number().min(0).max(1),
     }).passthrough()).min(2),
+    prompt_change: z.object({
+      diff: z.array(z.object({
+        op: z.enum(["equal", "insert", "delete", "replace"]),
+        before: z.array(z.string()),
+        after: z.array(z.string()),
+      }).passthrough()).min(1),
+    }).passthrough().optional(),
   }).passthrough().optional(),
 }).passthrough();
 
