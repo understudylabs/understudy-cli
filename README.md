@@ -140,6 +140,7 @@ arguments and filters, for example `understudy workloads route --help`.
 | `projects` | `list`, `show`, `create`, `update`, `delete`, `switch`, `ensure-default` | Application/service groupings. `switch` saves the project as this directory's default. |
 | `workloads` | `list`, `show`, `create`, `update`, `route` | Model tasks, capture settings, and explicit model traffic routes. |
 | `models` | `list`, `show` | Models in your organization's catalog. |
+| `benchmarks` | `list`, `show` | Read published workload benchmarks and model recommendations. |
 | `keys` | `list`, `create`, `exec`, `revoke` | API key metadata, private key storage, and credential delivery to a child process. |
 
 New workloads have capture disabled by default. Setting a model route enables
@@ -149,6 +150,16 @@ Capture retains interaction contents for prompt/response debugging and replay;
 request metadata remains available without it. During setup, choose retention
 for the intended traffic rather than copying settings from unrelated workloads.
 See the [resource command guide](docs/resource-commands.md).
+
+To give a coding agent the current published benchmark and recommendation for
+one workload, run this from the application workspace:
+
+```sh
+understudy benchmarks show --project "<project>" --workload "<workload>" --include-report --json
+```
+
+The full manifest may include prompt and evaluation content; review it before
+sharing it with another agent or saving the output.
 
 `workloads create` prints the project and workload request headers, strongly
 recommends session IDs for session-level evaluation, and explains turn IDs and

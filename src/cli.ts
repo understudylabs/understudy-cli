@@ -6,6 +6,7 @@ import {
   type AuthCommandDependencies,
 } from "./commands/auth.js";
 import { addModelsCommand } from "./commands/models.js";
+import { addBenchmarksCommands } from "./commands/benchmarks.js";
 import { addBillingCommands } from "./commands/billing.js";
 import { addCapturesCommands } from "./commands/captures.js";
 import { addContextCommands } from "./commands/context.js";
@@ -43,6 +44,7 @@ export function createCli(
 
   addAuthenticationCommands(program, authDependencies);
   addBillingCommands(program);
+  addBenchmarksCommands(program);
   addCapturesCommands(program);
   addContextCommands(program);
   addKeysCommands(program);
