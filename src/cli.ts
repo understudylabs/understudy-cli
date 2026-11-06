@@ -28,7 +28,7 @@ import { addWorkloadsCommands } from "./commands/workloads.js";
 import { CliError, MissingCapabilityError } from "./errors.js";
 import { sanitizeTerminalText, stringifyJsonOutput } from "./output.js";
 
-const packageVersion = "0.1.1";
+const packageVersion = "0.1.2";
 
 export function createCli(
   authDependencies: AuthCommandDependencies = createAuthCommandDependencies(),
