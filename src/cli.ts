@@ -10,6 +10,7 @@ import { addBenchmarksCommands } from "./commands/benchmarks.js";
 import { addBillingCommands } from "./commands/billing.js";
 import { addCapturesCommands } from "./commands/captures.js";
 import { addContextCommands } from "./commands/context.js";
+import { addHooksCommands } from "./commands/hooks.js";
 import { addKeysCommands } from "./commands/keys.js";
 import { addMigrationCommands } from "./commands/migrations.js";
 import { addProjectsCommands } from "./commands/projects.js";
@@ -47,6 +48,7 @@ export function createCli(
   addBenchmarksCommands(program);
   addCapturesCommands(program);
   addContextCommands(program);
+  addHooksCommands(program);
   addKeysCommands(program);
   addModelsCommand(program);
   addMigrationCommands(program);
