@@ -121,6 +121,9 @@ export function createBenchmarksService(options: ManagementScopeOptions): Benchm
     },
 
     async show(input) {
+      if (input.expectPublication !== undefined && input.expectPublication.length === 0) {
+        throw new CliError("Expected publication id must not be empty.");
+      }
       const scope = await resolveManagementScope(options, {
         project: input.project,
         workload: input.workload,
@@ -137,7 +140,7 @@ export function createBenchmarksService(options: ManagementScopeOptions): Benchm
           (result.publication && (result.publication.org_id !== session.organizationId || result.publication.project_id !== project!.id || result.publication.workload_id !== workload!.id))) {
         throw new CliError("Understudy returned a benchmark outside the selected workload.");
       }
-      if (input.expectPublication && result.publication?.id !== input.expectPublication) {
+      if (input.expectPublication !== undefined && result.publication?.id !== input.expectPublication) {
         throw new CliError("The published benchmark has changed. Refresh the dashboard and copy the agent handoff again.");
       }
       const report = result.benchmark?.report;
