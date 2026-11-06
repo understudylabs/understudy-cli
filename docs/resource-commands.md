@@ -22,6 +22,9 @@ accept an id. A selector that matches multiple resources is an error.
 | `workloads route <workload> --clear` | Clear its model route. |
 | `models show <model>` | Return known model identity, display name, and open-weight metadata. |
 | `models list --gateway` / `models show <model> --gateway` | Read the gateway catalog's declared wire formats using saved inference access. |
+| `benchmarks list` | List workloads and their current published benchmark, if any. |
+| `benchmarks show --project <project> --workload <workload>` | Summarize the current benchmark and its recommendation without printing the full report. |
+| `benchmarks show --project <project> --workload <workload> --include-report --json` | Return the full published benchmark manifest, including any recommendation report and prompt diff. |
 | `keys list` | Return the key metadata page exposed by the platform. |
 | `keys create --name <name>` | Create a key and privately retain its one-time value. |
 | `keys exec <reference> -- <command> [args...]` | Inject a stored key into a child environment without printing it. |
@@ -123,6 +126,25 @@ such as `openai-chat` or `anthropic-messages`. Missing metadata stays `null` /
 formats do not establish tool behavior, parameter support, model health, prices,
 or which model actually serves a request. The default management catalog remains
 usable without inference setup.
+
+`benchmarks` uses the authenticated organization's management API. `list` reads
+the organization-wide index; it includes workloads without a publication in
+JSON. `show` resolves one project and workload from exact selectors or the
+current directory context, then verifies that the returned publication and
+manifest belong to that scope. It reports explicitly when no benchmark has
+been published. Both commands are read-only and send no inference requests.
+
+The default `show` output contains publication metadata, the serialized manifest
+size, and a compact recommendation. Add `--include-report` to include the entire
+published manifest in text or JSON output. That response may contain
+customer-authored prompt, rubric, scenario, and evaluation material; the CLI
+does not write it to a file.
+If saving it for agent review, keep it in the application's ignored,
+package-excluded `.understudy/` directory with owner-only permissions. The
+management response is bounded to 16 MiB, and this command does not paginate
+an individual benchmark. A report's prompt label and optional diff are not a
+guaranteed, versioned deployable prompt artifact; check the application prompt
+before planning an update.
 
 These contracts are covered by invented fixtures and mocked HTTP responses.
 Source contracts and local tests do not establish live deployment availability.
