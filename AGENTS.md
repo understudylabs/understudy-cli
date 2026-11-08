@@ -68,6 +68,10 @@ do not import whole files or unrelated workflows merely to preserve source shape
   and journals deterministic. Workflow, harness adaptations, clusters, reviews,
   and presentation belong to the maintained Markdown skill and private agent code.
   Replay mocks never execute customer tools or change routing.
+- Work hooks (`understudy hooks`) are in scope: on a coding tool's hook they
+  report only the session id, repository identity, branch, and HEAD commit
+  when those change (`docs/hooks-commands.md`). They never send code, prompts,
+  paths, or remote credentials, print nothing, and never fail the agent.
 - Monitoring, Desktop, local model serving, and training job execution remain
   deferred.
 - Until automated tracked-and-packed-content checks exist, manual inspection is
