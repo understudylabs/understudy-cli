@@ -30,3 +30,9 @@ export function formatOutput(
   const lines = typeof human === "string" ? [human] : human;
   return lines.map(sanitizeTerminalText).join("\n");
 }
+
+/** A 0..1 rate with its 95% interval, as `78.3% [70.1%, 85.0%]`. */
+export function formatRateInterval(interval: { value: number; low: number; high: number }): string {
+  const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
+  return `${pct(interval.value)} [${pct(interval.low)}, ${pct(interval.high)}]`;
+}

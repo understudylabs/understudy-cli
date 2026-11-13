@@ -25,6 +25,13 @@ accept an id. A selector that matches multiple resources is an error.
 | `benchmarks list` | List workloads and their current published benchmark, if any. |
 | `benchmarks show --project <project> --workload <workload>` | Summarize the current benchmark and its recommendation without printing the full report. |
 | `benchmarks show --project <project> --workload <workload> --include-report --json` | Return the full published benchmark manifest, including any recommendation report and prompt diff. |
+| `experiments list [--project <project> [--workload <workload>]] [--status <status>]` | List experiments visible to the organization, newest first. |
+| `experiments show <experiment>` | Show one experiment's models, share, audience, and status. |
+| `experiments results <experiment> [--from <time>] [--to <time>]` | Compare control and candidate using the workload's evaluator summary. |
+| `evaluators list [--project <project> [--workload <workload>]]` | List visible evaluators with their last 30 days of judged results. |
+| `evaluators show [<evaluator>] [--project <project> --workload <workload>]` | Show the active version, judge, and rubrics, by id or workload. |
+| `evaluators summary <evaluator> [--from <time>] [--to <time>]` | Summarize judged traces by model, rubric, and experiment arm. |
+| `evaluators scores <evaluator> [filters] [--include-reasons]` | Page per-trace verdicts; organization admins only. |
 | `keys list` | Return the key metadata page exposed by the platform. |
 | `keys create --name <name>` | Create a key and privately retain its one-time value. |
 | `keys exec <reference> -- <command> [args...]` | Inject a stored key into a child environment without printing it. |
@@ -145,6 +152,40 @@ management response is bounded to 16 MiB, and this command does not paginate
 an individual benchmark. A report's prompt label and optional diff are not a
 guaranteed, versioned deployable prompt artifact; check the application prompt
 before planning an update.
+
+`experiments` and `evaluators` read the organization's customer API
+(`/customer/v1`), which accepts only browser OAuth. Organization keys are
+refused before any request. These commands are read-only; they never create,
+activate, stop, or change experiments or evaluators, and send no inference.
+
+An experiment assigns each session with an `x-understudy-session-id` to its
+control or candidate model; requests without a session ID are excluded.
+Experiments have no results API of their own. `experiments results` finds the
+workload's visible evaluator and reads its summary over the experiment's life,
+from creation to now, bounded to the API's 90-day maximum and reported as
+clamped when shortened. It reports each arm's judged, rated, and passed traces,
+the trace pass rate with its 95% interval, the cost of the judged call per
+trace, and the candidate-minus-control difference. Rates and the difference
+are `null` until an arm has 30 rated traces; the CLI does not compute its own.
+Results cover the evaluator's current version only, so activating another
+version restarts the comparison. Arms group traces by assignment: a fallback
+response still counts in its assigned arm. Without a visible evaluator, or for
+a draft, the command explains that results cannot be measured.
+
+`experiments list` filters the platform's newest 200 experiments locally and
+sets `possiblyTruncated` when that page is full. Project and workload selectors
+are exact and resolved like other workload commands; `--workload` requires
+`--project`. Human output summarizes a tag audience by its value count; JSON
+includes the values.
+
+The platform shows an evaluator only when it is visible to customers and not a
+draft, and only its active version. `evaluators summary` and `scores` accept ISO
+dates or UTC datetimes, default to the last 30 days, and refuse ranges over 90
+days before sending a request. `evaluators scores` pages 1-20 results. Judge
+reasons can quote the organization's traces, so they are omitted from text and
+JSON unless `--include-reasons` is given; code-check reasons are the rubric's
+own wording. If saving them for agent review, follow the benchmark guidance
+above for the application's ignored `.understudy/` directory.
 
 These contracts are covered by invented fixtures and mocked HTTP responses.
 Source contracts and local tests do not establish live deployment availability.
