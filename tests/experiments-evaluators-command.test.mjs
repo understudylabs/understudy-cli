@@ -137,7 +137,7 @@ test("evaluators scores forwards filters and keeps reasons opt-in", async () => 
   await run("evaluators", "scores", "synthetic-evaluator", "--verdict", "fail", "--limit", "5");
   assert.deepEqual(calls[0], ["evaluators.scores", { evaluator: "synthetic-evaluator", verdict: "fail", limit: "5" }]);
   assert.match(output[0], /synthetic-request  example\/control-model  valid_json  fail/);
-  assert.match(output[0], /--cursor synthetic-cursor/);
+  assert.match(output[0], /More results: --cursor 'synthetic-cursor'$/m);
   assert.doesNotMatch(output[0], /reason:/);
   await run("evaluators", "scores", "synthetic-evaluator", "--include-reasons");
   assert.equal(calls[1][1].includeReasons, true);

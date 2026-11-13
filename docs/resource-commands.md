@@ -181,7 +181,8 @@ includes the values.
 The platform shows an evaluator only when it is visible to customers and not a
 draft, and only its active version. `evaluators summary` and `scores` accept ISO
 dates or UTC datetimes, default to the last 30 days, and refuse ranges over 90
-days before sending a request. `evaluators scores` pages 1-20 results. Judge
+days before sending a request. `evaluators scores` pages 1-20 results; the
+platform can extend a page so that one trace's rubric verdicts stay together. Judge
 reasons can quote the organization's traces, so they are omitted from text and
 JSON unless `--include-reasons` is given; code-check reasons are the rubric's
 own wording. If saving them for agent review, follow the benchmark guidance

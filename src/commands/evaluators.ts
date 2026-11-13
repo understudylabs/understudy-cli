@@ -55,7 +55,7 @@ export function addEvaluatorsCommands(
     .option("--rubric <name>", "Rubric name.")
     .option("--from <time>", "Start of the trace window. Default: 30 days before --to.")
     .option("--to <time>", "End of the trace window. Default: now.")
-    .option("--limit <count>", "Page size from 1 to 20.")
+    .option("--limit <count>", "Page size from 1 to 20. A page can run past it to finish the last trace's rubrics.")
     .option("--cursor <cursor>", "Continue from a previous page.")
     .option("--include-reasons", "Include judge reasons, which can quote the organization's traces.")
     .action(async function (this: Command, evaluator: string, options: {
@@ -69,7 +69,8 @@ export function addEvaluatorsCommands(
           ...(result.reasonsIncluded && score.reason ? [`  reason: ${score.reason}`] : []),
         ]).flat(),
         result.scores.length === 0 ? "No scores match." : `${result.scores.length} score(s).`,
-        ...(result.nextCursor ? [`More results: --cursor ${result.nextCursor}`] : []),
+        // Cursors contain a space, so quote them for pasting into a shell.
+        ...(result.nextCursor ? [`More results: --cursor '${result.nextCursor}'`] : []),
       ]));
     });
 }
