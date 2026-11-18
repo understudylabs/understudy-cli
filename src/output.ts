@@ -36,3 +36,11 @@ export function formatRateInterval(interval: { value: number; low: number; high:
   const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
   return `${pct(interval.value)} [${pct(interval.low)}, ${pct(interval.high)}]`;
 }
+
+/**
+ * Quote a value as one POSIX shell word, for copy-paste hints that embed
+ * server-provided text. Single quotes are closed, escaped, and reopened.
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}

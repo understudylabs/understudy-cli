@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { createCredentialStore } from "../auth/credentials.js";
 import { createEvaluatorsService, type EvaluatorsService, type EvaluatorShowResult } from "../evaluators/service.js";
 import type { Summary } from "../evaluators/contracts.js";
-import { formatOutput, formatRateInterval as rateText } from "../output.js";
+import { formatOutput, formatRateInterval as rateText, shellQuote } from "../output.js";
 
 export function addEvaluatorsCommands(
   program: Command,
@@ -69,8 +69,9 @@ export function addEvaluatorsCommands(
           ...(result.reasonsIncluded && score.reason ? [`  reason: ${score.reason}`] : []),
         ]).flat(),
         result.scores.length === 0 ? "No scores match." : `${result.scores.length} score(s).`,
-        // Cursors contain a space, so quote them for pasting into a shell.
-        ...(result.nextCursor ? [`More results: --cursor '${result.nextCursor}'`] : []),
+        // The server-provided cursor contains a space; quote it as one shell
+        // word so the hint is safe to paste whatever characters it holds.
+        ...(result.nextCursor ? [`More results: --cursor ${shellQuote(result.nextCursor)}`] : []),
       ]));
     });
 }
