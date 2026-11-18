@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatOutput, sanitizeTerminalText } from "../dist/output.js";
+import { formatOutput, sanitizeTerminalText, shellQuote } from "../dist/output.js";
 
 function command(json = false) {
   return { optsWithGlobals: () => ({ json }) };
@@ -46,4 +46,13 @@ test("terminal text sanitizer replaces every bidirectional control", () => {
     ),
     "????????????",
   );
+});
+
+test("shell quoting keeps server text inside one shell word", async () => {
+  const { execFileSync } = await import("node:child_process");
+  for (const value of ["2030-01-01 00:00:00.000|synthetic|rubric", "x'; echo injected; '", "a'b''c", "$(echo nope) `echo nope` $HOME"]) {
+    const quoted = shellQuote(value);
+    const echoed = execFileSync("/bin/sh", ["-c", `printf '%s' ${quoted}`], { encoding: "utf8" });
+    assert.equal(echoed, value);
+  }
 });

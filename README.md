@@ -141,6 +141,8 @@ arguments and filters, for example `understudy workloads route --help`.
 | `workloads` | `list`, `show`, `create`, `update`, `route` | Model tasks, capture settings, and explicit model traffic routes. |
 | `models` | `list`, `show` | Models in your organization's catalog. |
 | `benchmarks` | `list`, `show` | Read published workload benchmarks and model recommendations. |
+| `experiments` | `list`, `show`, `results` | Read online model experiments and compare control and candidate through the workload's evaluator. Browser OAuth only. |
+| `evaluators` | `list`, `show`, `summary`, `scores` | Read workload evaluators, their rubrics, and judged results. Browser OAuth only; `scores` requires an organization admin. |
 | `keys` | `list`, `create`, `exec`, `revoke` | API key metadata, private key storage, and credential delivery to a child process. |
 
 New workloads have capture disabled by default. Setting a model route enables
